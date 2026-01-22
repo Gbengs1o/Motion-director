@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motion Director</title>
+  <!-- Load compiled Tailwind CSS -->
+  <link href="./dist/output.css" rel="stylesheet">
+  <!-- Load xterm styles -->
+  <link rel="stylesheet" href="./node_modules/xterm/css/xterm.css" />
+  <style>
+    /* Scrollbar customization */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #18181b;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #3f3f46;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #52525b;
+    }
+  </style>
+</head>
+
+<body class="bg-zinc-950 text-white h-screen flex flex-col overflow-hidden font-sans select-none">
+
+  <!-- Welcome Screen Overlay -->
+  <div id="welcome-screen" class="fixed inset-0 z-50 bg-zinc-950 flex flex-col items-center justify-center space-y-8">
+    <div class="text-center">
+      <h1 class="text-4xl font-bold tracking-tight text-white mb-2">Motion Director</h1>
+      <p class="text-zinc-500">Create and manage motion graphics scenes.</p>
+    </div>
+    <div class="flex gap-4">
+      <button id="btn-open-work"
+        class="group flex flex-col items-center justify-center w-40 h-40 bg-zinc-900 border border-zinc-800 rounded-xl hover:bg-zinc-800 hover:border-zinc-700 transition-all shadow-lg hover:shadow-blue-900/10 hover:-translate-y-1">
+        <svg xmlns="http://www.w3.org/2000/svg"
+          class="w-10 h-10 text-blue-500 mb-3 group-hover:scale-110 transition-transform" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path
+            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+        </svg>
+        <span class="font-medium text-zinc-200">Open Work</span>
+        <span class="text-xs text-zinc-600 mt-1">Existing Folder</span>
+      </button>
+      <button id="btn-create-work"
+        class="group flex flex-col items-center justify-center w-40 h-40 bg-zinc-900 border border-zinc-800 rounded-xl hover:bg-zinc-800 hover:border-zinc-700 transition-all shadow-lg hover:shadow-cyan-900/10 hover:-translate-y-1">
+        <svg xmlns="http://www.w3.org/2000/svg"
+          class="w-10 h-10 text-cyan-500 mb-3 group-hover:scale-110 transition-transform" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14" />
+          <path d="M12 5v14" />
+        </svg>
+        <span class="font-medium text-zinc-200">Create Work</span>
+        <span class="text-xs text-zinc-600 mt-1">New Project</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Application Interface (Hidden initially) -->
+  <div id="main-interface" class="flex-1 flex hidden">
+
+    <!-- Left Sidebar -->
+    <div id="sidebar"
+      class="w-[280px] bg-zinc-900/50 border-r border-zinc-800 flex flex-col flex-shrink-0 transition-all duration-300 overflow-hidden relative">
+      <!-- Project Header -->
+      <div class="h-10 flex items-center justify-between px-3 border-b border-zinc-800 bg-zinc-900">
+        <span class="text-xs font-bold uppercase tracking-wider text-zinc-400">Project</span>
+        <button id="btn-collapse-sidebar" class="text-zinc-500 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg"
+            width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+          </svg></button>
+      </div>
+
+      <!-- Main Sidebar Actions -->
+      <div class="p-3 space-y-3">
+        <!-- New Scene Button -->
+        <button id="btn-new-scene"
+          class="w-full bg-blue-600 hover:bg-blue-500 text-white h-9 rounded-md font-medium text-sm shadow-sm transition-colors flex items-center justify-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New Scene
+        </button>
+
+        <!-- Grid Buttons -->
+        <div class="grid grid-cols-2 gap-2">
+          <button id="btn-styles"
+            class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 h-9 rounded px-2 text-xs font-medium flex items-center gap-2 border border-zinc-700/50">
+            <span class="text-pink-400">🎨</span> Styles
+          </button>
+          <button id="btn-assets"
+            class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 h-9 rounded px-2 text-xs font-medium flex items-center gap-2 border border-zinc-700/50">
+            <span class="text-yellow-400">📁</span> Assets
+          </button>
+          <button id="btn-edit"
+            class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 h-9 rounded px-2 text-xs font-medium flex items-center gap-2 border border-zinc-700/50">
+            <span class="text-cyan-400">🔍</span> Edit
+          </button>
+          <button id="btn-render"
+            class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 h-9 rounded px-2 text-xs font-medium flex items-center gap-2 border border-zinc-700/50">
+            <span class="text-purple-400">🎬</span> Render
+          </button>
+        </div>
+
+        <!-- Scene List Container -->
+        <div class="mt-4">
+          <h3 class="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-2 px-1">Scenes</h3>
+          <div id="scene-list" class="space-y-1">
+            <!-- Scenes will be injected here -->
+          </div>
+        </div>
+
+        <!-- Secondary Actions -->
+        <button id="btn-open-scene-folder"
+          class="w-full bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200 h-9 rounded border border-zinc-800 text-xs font-medium flex items-center justify-center gap-2 transition-colors">
+          <span class="text-yellow-600">📂</span> Open Scene Folder
+        </button>
+        <button id="btn-refresh-preview"
+          class="w-full bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-200 h-9 rounded border border-zinc-800 text-xs font-medium flex items-center justify-center gap-2 transition-colors">
+          <span class="text-blue-400">↻</span> Refresh Preview
+        </button>
+      </div>
+
+      <!-- Spacer -->
+      <div class="flex-1 bg-zinc-950/30"></div>
+    </div>
+
+    <!-- Toggle Button (Visible when sidebar collapsed) -->
+    <button id="btn-expand-sidebar"
+      class="hidden absolute top-3 left-3 z-50 p-2 bg-zinc-900 border border-zinc-800 rounded text-zinc-400 hover:text-white">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="9" y1="3" x2="9" y2="21"></line>
+      </svg>
+    </button>
+
+    <!-- Main Content (Canvas + Timeline) -->
+    <div class="flex-1 flex flex-col min-w-0 bg-black relative">
+
+      <!-- Canvas Toolbar -->
+      <div class="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center px-4 justify-between">
+        <div class="flex items-center gap-4">
+          <div class="flex items-center gap-2 text-zinc-400 text-xs">
+            <span>Zoom:</span>
+            <div class="flex bg-zinc-950 rounded border border-zinc-800 p-0.5 gap-1">
+              <button id="btn-zoom-out"
+                class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-[10px] font-medium">-</button>
+              <button id="btn-fit"
+                class="px-3 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-[10px] font-medium">Fit</button>
+              <button id="btn-zoom-in"
+                class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-[10px] font-medium">+</button>
+            </div>
+          </div>
+          <span class="text-xs text-zinc-600 italic">Waiting...</span>
+        </div>
+
+        <div class="flex gap-2">
+          <button id="btn-terminal-toolbar"
+            class="h-6 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded border border-zinc-700 flex items-center gap-2">
+            <span>💻</span> Terminal
+          </button>
+          <button id="btn-pan"
+            class="h-6 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded border border-zinc-700 flex items-center gap-2">
+            <span>✋</span> Pan
+          </button>
+          <button id="btn-fullscreen"
+            class="h-6 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded border border-zinc-700 flex items-center gap-2">
+            <span>⛶</span> Fullscreen
+          </button>
+        </div>
+      </div>
+
+      <!-- Canvas Area -->
+      <div
+        class="flex-1 relative bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPScyMCcgaGVpZ2h0PScyMCc+CjxyZWN0IHdpZHRoPScyMCcgaGVpZ2h0PScyMCcgZmlsbD0nIzExMTgxYicvPgo8cmVjdCB4PScwJyB5PScwJyB3aWR0aD0nMTAnIGhlaWdodD0nMTAnIGZpbGw9JyMxODE4MWInLz4KPHJlY3QgeD0nMTAnIHk9JzEwJyB3aWR0aD0nMTAnIGhlaWdodD0nMTAnIGZpbGw9JyMxODE4MWInLz4KPC9zdmc+')] overflow-hidden">
+        <div class="absolute inset-0 flex items-center justify-center p-8">
+          <div id="preview-container"
+            class="aspect-video w-full h-full max-w-4xl max-h-full bg-black border border-zinc-800 shadow-2xl relative overflow-hidden flex items-center justify-center">
+            <!-- Iframe Preview -->
+            <iframe id="preview-frame" src="about:blank" class="w-full h-full border-none block"></iframe>
+            <!-- Overlay for Capture -->
+            <div id="preview-overlay" class="absolute inset-0 z-10 pointer-events-none"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline Area -->
+      <div id="timeline-panel"
+        class="h-[180px] bg-zinc-950 border-t border-zinc-800 flex flex-col transition-all duration-300">
+
+        <!-- Timeline Controls -->
+        <div class="h-10 border-b border-zinc-800 flex items-center justify-between px-4">
+          <div class="flex items-center gap-3">
+            <button class="text-zinc-400 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg" width="20"
+                height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                  d="M7 6c.55 0 1 .45 1 1v10c0 .55-.45 1-1 1s-1-.45-1-1V7c0-.55.45-1 1-1zm3.66 6.82l5.77 4.07c.66.47 1.58-.01 1.58-.82V7.93c0-.81-.91-1.28-1.58-.82l-5.77 4.07c-.57.4-.57 1.24 0 1.64z" />
+              </svg></button> <!-- Prev -->
+            <button id="play-btn" class="text-zinc-200 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg"
+                width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg></button> <!-- Play -->
+            <button class="text-zinc-400 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg" width="20"
+                height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                  d="M17 7c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1s 1-.45 1-1V8c0-.55-.45-1-1-1zm-3.66 6.82l-5.77 4.07c-.66.47-1.58-.01-1.58-.82V7.93c0-.81.91-1.28 1.58-.82l5.77 4.07c.57.4.57 1.24 0 1.64z" />
+              </svg></button> <!-- Next -->
+          </div>
+
+          <div class="flex-1 mx-4 flex items-center gap-3">
+            <span id="time-current" class="text-xs font-mono text-zinc-500 w-10 text-right">00:00</span>
+            <div id="timeline-scrubber" class="relative flex-1 h-1 bg-zinc-800 rounded-full cursor-pointer group">
+              <div id="timeline-progress" class="absolute left-0 top-0 bottom-0 bg-blue-600 w-[0%] rounded-full"></div>
+              <div id="timeline-handle"
+                class="absolute left-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity">
+              </div>
+            </div>
+            <span id="time-total" class="text-xs font-mono text-zinc-500 w-10">00:00</span>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <button id="btn-playback-speed"
+              class="flex items-center text-xs text-zinc-400 border border-zinc-800 rounded bg-zinc-900 px-2 py-1 hover:bg-zinc-800 cursor-pointer">
+              <span id="speed-text">1x</span>
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ml-1">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            <button id="btn-loop" class="text-zinc-600 hover:text-white transition-colors" title="Toggle Loop"><svg
+                xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 21h5v-5" />
+              </svg></button>
+            <!-- Timeline Minimize Button -->
+            <button id="btn-toggle-timeline" class="text-zinc-400 hover:text-white ml-2" title="Toggle Timeline">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Audio Track -->
+        <div id="audio-track-panel" class="flex-1 p-2 bg-zinc-900/50">
+          <!-- Header Row -->
+          <div class="flex items-center justify-between mb-2 px-2">
+            <div class="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                class="text-purple-400">
+                <path d="M9 18V5l12-2v13" />
+                <circle cx="6" cy="18" r="3" />
+                <circle cx="18" cy="16" r="3" />
+              </svg>
+              <span class="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Audio Track</span>
+              <span id="audio-filename" class="text-[10px] text-zinc-500 truncate max-w-[120px]"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <!-- Duration Display -->
+              <span id="audio-duration" class="text-[10px] text-zinc-500 font-mono">00:00</span>
+              <!-- Joint Mode Toggle -->
+              <button id="btn-audio-joint-mode"
+                class="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors bg-zinc-800 border-zinc-700 text-zinc-400 hover:bg-zinc-700"
+                title="Toggle Joint Mode (sync with scene)">
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                </svg>
+                <span id="joint-mode-label">Non-Joint</span>
+              </button>
+              <!-- Add Audio Button -->
+              <button id="btn-add-audio"
+                class="text-[10px] bg-zinc-800 hover:bg-zinc-700 hover:text-white text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 transition-colors">+
+                Add Audio</button>
+            </div>
+          </div>
+
+          <!-- Audio Player Container (hidden when no audio) -->
+          <div id="audio-player-container" class="hidden">
+            <!-- Time + Scrubber Row -->
+            <div class="flex items-center gap-2 px-2 mb-1">
+              <span id="audio-current-time" class="text-[10px] text-zinc-400 font-mono w-10">00:00</span>
+              <div id="audio-progress-track" class="flex-1 h-6 bg-zinc-800 rounded relative cursor-pointer group">
+                <!-- Progress Fill -->
+                <div id="audio-progress-fill"
+                  class="absolute top-0 left-0 h-full bg-purple-600/50 rounded-l pointer-events-none" style="width: 0%">
+                </div>
+                <!-- Scrubber Handle (lower z-index, no pointer events - track handles seeking) -->
+                <div id="audio-scrubber"
+                  class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-purple-500 rounded-full shadow-lg pointer-events-none z-0"
+                  style="left: 0%">
+                  <!-- Time Tooltip -->
+                  <div id="audio-scrubber-tooltip"
+                    class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-1.5 py-0.5 bg-black text-[9px] text-white rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+                    0.0s</div>
+                </div>
+                <!-- Marker Track (higher z-index so markers can be clicked) -->
+                <div id="audio-marker-track" class="absolute top-0 left-0 w-full h-full z-10"></div>
+              </div>
+              <span id="audio-total-time" class="text-[10px] text-zinc-500 font-mono w-10 text-right">00:00</span>
+            </div>
+
+            <!-- Controls Row -->
+            <div class="flex items-center justify-between px-2">
+              <div class="flex items-center gap-2">
+                <!-- Play/Pause -->
+                <button id="btn-audio-play" class="p-1 text-zinc-400 hover:text-white transition-colors"
+                  title="Play/Pause Audio">
+                  <svg id="audio-play-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                    viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="5 3 19 12 5 21 5 3" />
+                  </svg>
+                  <svg id="audio-pause-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                    viewBox="0 0 24 24" fill="currentColor" class="hidden">
+                    <rect x="6" y="4" width="4" height="16" />
+                    <rect x="14" y="4" width="4" height="16" />
+                  </svg>
+                </button>
+                <!-- Mute Button -->
+                <button id="btn-audio-mute" class="p-1 text-zinc-400 hover:text-white transition-colors"
+                  title="Mute/Unmute">
+                  <svg id="audio-volume-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  </svg>
+                  <svg id="audio-muted-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" class="hidden">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                    <line x1="23" y1="9" x2="17" y2="15" />
+                    <line x1="17" y1="9" x2="23" y2="15" />
+                  </svg>
+                </button>
+                <!-- Volume Slider -->
+                <input type="range" id="audio-volume-slider" min="0" max="100" value="100"
+                  class="w-16 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                  title="Volume">
+                <!-- Add Marker -->
+                <button id="btn-add-marker" class="p-1 text-zinc-400 hover:text-yellow-400 transition-colors"
+                  title="Add Marker at Current Time">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+                    <circle cx="12" cy="10" r="3" />
+                  </svg>
+                </button>
+                <!-- Clear Markers -->
+                <button id="btn-clear-markers" class="p-1 text-zinc-400 hover:text-red-400 transition-colors"
+                  title="Clear All Markers">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                </button>
+              </div>
+              <!-- Marker Duration Measurement -->
+              <div id="marker-duration-display" class="hidden text-[10px] text-yellow-400 font-mono">
+                <span>Selection: </span><span id="marker-duration-value">0.0s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drop Zone (shown when no audio) -->
+          <div id="audio-drop-zone"
+            class="h-12 border-2 border-dashed border-zinc-800 hover:border-zinc-700 rounded-md flex items-center justify-center transition-colors cursor-pointer bg-black/20 group">
+            <span class="text-xs text-zinc-600 group-hover:text-zinc-500">Drop MP3 here or click "Add Audio"</span>
+          </div>
+        </div>
+
+        <!-- Footer Status -->
+        <div
+          class="h-6 bg-zinc-950 border-t border-zinc-800 flex items-center justify-between px-2 text-[10px] text-zinc-500">
+          <div class="flex items-center gap-4">
+            <span class="flex items-center gap-1">❌ 0 ⚠️ 0</span>
+            <span>(4 renderers + Electron Main) Mem: 2.31 GB</span>
+          </div>
+          <div class="flex items-center gap-4">
+            <span>Motion Director</span>
+            <span>Antigravity - Settings</span>
+            <span>🔔</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- New Scene Modal -->
+  <div id="new-scene-modal" class="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center hidden">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-96 shadow-2xl">
+      <h2 class="text-lg font-bold text-white mb-4">Create New Scene</h2>
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Scene Name</label>
+        <input id="input-scene-name" type="text"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-blue-600"
+          placeholder="e.g., MySuperScene">
+        <p class="text-[10px] text-zinc-600 mt-1">Check SCENE_API.md for rules.</p>
+      </div>
+      <div class="flex justify-end gap-2">
+        <button id="btn-cancel-scene"
+          class="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">Cancel</button>
+        <button id="btn-create-scene-confirm"
+          class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors font-medium">Create
+          Scene</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Assets Modal -->
+  <div id="assets-modal" class="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center hidden">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-[500px] h-[400px] shadow-2xl flex flex-col">
+      <div class="flex justify-between items-center mb-4">
+        <h2 id="assets-modal-title" class="text-lg font-bold text-white">Assets</h2>
+        <button id="btn-close-assets" class="text-zinc-500 hover:text-white">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div
+        class="bg-zinc-950 border border-zinc-800 rounded flex-1 mb-4 p-2 overflow-y-auto grid grid-cols-3 gap-2 align-content-start"
+        id="asset-list">
+        <!-- Assets injected here -->
+        <div class="text-zinc-600 text-xs col-span-3 text-center py-10">No assets found</div>
+      </div>
+
+      <div class="flex justify-between items-center gap-2">
+        <button id="btn-refresh-assets" class="p-2 text-zinc-400 hover:text-white bg-zinc-800 rounded" title="Refresh">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3" />
+          </svg>
+        </button>
+        <div class="flex gap-2">
+          <button id="btn-add-assets"
+            class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors font-medium flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add Files
+          </button>
+          <button id="btn-open-asset-folder"
+            class="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-white rounded transition-colors font-medium flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            Open Folder
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Render Settings Modal -->
+  <div id="render-modal" class="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center hidden">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-6 w-[420px] shadow-2xl">
+      <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+        <span class="text-purple-400">🎬</span> Render Settings
+      </h2>
+
+      <!-- Output Name -->
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Output Name</label>
+        <input id="render-output-name" type="text" placeholder="MyVideo"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+        <p class="text-[9px] text-zinc-600 mt-0.5">File name (without extension)</p>
+      </div>
+
+      <!-- Format Selection -->
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Output Format</label>
+        <select id="render-format"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+          <option value="mp4">MP4 Video</option>
+          <option value="webm">WebM Video</option>
+          <option value="png">Image Sequence (PNG)</option>
+          <option value="jpeg">Image Sequence (JPEG)</option>
+        </select>
+      </div>
+
+      <!-- Resolution -->
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Resolution</label>
+        <select id="render-resolution"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+          <option value="1920x1080">1920 × 1080 (1080p)</option>
+          <option value="1280x720">1280 × 720 (720p)</option>
+          <option value="3840x2160">3840 × 2160 (4K)</option>
+        </select>
+      </div>
+
+      <!-- Frame Rate -->
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Frame Rate</label>
+        <select id="render-fps"
+          class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+          <option value="30">30 FPS</option>
+          <option value="60">60 FPS</option>
+          <option value="24">24 FPS (Cinematic)</option>
+        </select>
+      </div>
+
+      <!-- Duration Row -->
+      <div class="mb-4 grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Start (sec)</label>
+          <input id="render-start" type="number" value="0" min="0" step="0.1"
+            class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+        </div>
+        <div>
+          <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Duration (sec)</label>
+          <input id="render-duration" type="number" value="0" min="0" step="0.1" placeholder="Full scene"
+            class="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-white focus:outline-none focus:border-purple-600">
+          <p class="text-[9px] text-zinc-600 mt-0.5">Leave 0 for full scene</p>
+        </div>
+      </div>
+
+      <!-- Audio Toggle (only for video) -->
+      <div id="render-audio-row" class="mb-4 flex items-center justify-between">
+        <label class="text-xs text-zinc-400 uppercase font-bold">Include Audio</label>
+        <button id="render-audio-toggle" class="w-12 h-6 rounded-full bg-purple-600 relative transition-colors">
+          <span id="render-audio-knob"
+            class="absolute top-0.5 right-0.5 w-5 h-5 bg-white rounded-full transition-transform"></span>
+        </button>
+      </div>
+
+      <!-- Output Path -->
+      <div class="mb-4">
+        <label class="block text-xs text-zinc-400 mb-1 uppercase font-bold">Output Folder</label>
+        <div class="flex gap-2">
+          <input id="render-output-path" type="text" readonly placeholder="Select output folder..."
+            class="flex-1 bg-zinc-950 border border-zinc-800 rounded p-2 text-white text-sm focus:outline-none">
+          <button id="btn-select-output"
+            class="px-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded border border-zinc-700 text-sm">
+            Browse
+          </button>
+        </div>
+      </div>
+
+      <!-- Buttons -->
+      <div class="flex justify-end gap-2 mt-6">
+        <button id="btn-render-cancel"
+          class="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-colors">
+          Cancel
+        </button>
+        <button id="btn-render-start"
+          class="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-500 text-white rounded transition-colors font-medium flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+          Start Render
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Render Progress Popup (Minimizable) -->
+  <div id="render-progress-popup" class="fixed bottom-4 right-4 z-[101] hidden">
+    <div id="render-progress-content"
+      class="bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl w-80 overflow-hidden">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-3 py-2 bg-zinc-800 border-b border-zinc-700">
+        <span class="text-xs font-bold text-zinc-300 flex items-center gap-2">
+          <span class="text-purple-400">🎬</span> Rendering...
+        </span>
+        <div class="flex items-center gap-1">
+          <button id="btn-render-minimize" class="p-1 text-zinc-400 hover:text-white transition-colors"
+            title="Minimize">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <button id="btn-render-abort" class="p-1 text-zinc-400 hover:text-red-400 transition-colors"
+            title="Cancel Render">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <!-- Progress Body -->
+      <div class="p-3">
+        <div class="mb-2">
+          <div class="flex justify-between text-[10px] text-zinc-400 mb-1">
+            <span id="render-progress-label">Preparing...</span>
+            <span id="render-progress-percent">0%</span>
+          </div>
+          <div class="w-full h-2 bg-zinc-800 rounded-full overflow-hidden">
+            <div id="render-progress-bar" class="h-full bg-purple-600 transition-all duration-200" style="width: 0%">
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-between text-[9px] text-zinc-500">
+          <span id="render-frame-info">Frame 0 / 0</span>
+          <span id="render-time-estimate">Estimating...</span>
+        </div>
+      </div>
+    </div>
+    <!-- Minimized State -->
+    <div id="render-progress-minimized"
+      class="hidden bg-purple-600 text-white px-3 py-2 rounded-lg cursor-pointer flex items-center gap-2 shadow-lg hover:bg-purple-500 transition-colors">
+      <span class="animate-pulse">🎬</span>
+      <span class="text-xs font-medium">Rendering: <span id="render-mini-percent">0%</span></span>
+    </div>
+  </div>
+
+  <!-- Terminal Window (Floating/Draggable) -->
+  <div id="terminal-window"
+    class="fixed top-20 right-20 z-[102] w-[650px] h-[450px] bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl flex flex-col hidden">
+    <!-- Header/Draggable Handle with Tabs -->
+    <div id="terminal-header"
+      class="h-10 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between px-2 cursor-move rounded-t-lg shrink-0">
+      <div class="flex items-center gap-1 h-full pt-1">
+        <button id="btn-tab-terminal"
+          class="px-3 h-full text-[10px] font-bold uppercase tracking-wider border-b-2 border-blue-500 text-white flex items-center gap-2 bg-zinc-800/50 rounded-t cursor-pointer">
+          <span class="text-green-400">💻</span> Terminal
+        </button>
+        <button id="btn-tab-chat"
+          class="px-3 h-full text-[10px] font-bold uppercase tracking-wider border-b-2 border-transparent text-zinc-500 hover:text-zinc-300 flex items-center gap-2 cursor-pointer transition-colors">
+          <span class="text-purple-400">🤖</span> AI Chat
+        </button>
+      </div>
+      <div class="flex items-center gap-1">
+        <button id="btn-terminal-minimize" class="p-1.5 text-zinc-500 hover:text-white transition-colors"
+          title="Minimize">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2">
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+        <button id="btn-terminal-close" class="p-1.5 text-zinc-500 hover:text-red-400 transition-colors" title="Close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Terminal View -->
+    <div id="view-terminal" class="flex-1 flex flex-col bg-black overflow-hidden relative">
+      <div id="terminal-container" class="flex-1 p-1"></div>
+    </div>
+
+    <!-- Chat View -->
+    <div id="view-chat" class="flex-1 flex flex-col bg-zinc-950/95 hidden relative overflow-hidden">
+      <!-- Interactive Toolbar -->
+      <div class="h-8 border-b border-zinc-800 bg-zinc-900/50 flex items-center justify-end px-3 gap-2 shrink-0">
+        <span class="text-[10px] text-zinc-600 uppercase font-bold mr-auto tracking-wider">Interactive Controls</span>
+        <button id="btn-key-up" class="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors"
+          title="Up Arrow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 19V5M5 12l7-7 7 7" />
+          </svg>
+        </button>
+        <button id="btn-key-down" class="p-1 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors"
+          title="Down Arrow">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12l7 7 7-7" />
+          </svg>
+        </button>
+        <div class="w-px h-4 bg-zinc-800 mx-1"></div>
+        <button id="btn-key-esc"
+          class="px-2 py-0.5 text-[10px] font-mono bg-zinc-800 border border-zinc-700 rounded text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors">ESC</button>
+        <button id="btn-key-ctrlc"
+          class="px-2 py-0.5 text-[10px] font-mono bg-red-900/20 border border-red-900/50 rounded text-red-400 hover:bg-red-900/40 transition-colors">^C</button>
+      </div>
+
+      <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 sidebar-scrollbar relative">
+        <!-- Messages will be injected here -->
+      </div>
+
+      <div id="chat-input-container" class="p-3 bg-zinc-900 border-t border-zinc-800 shrink-0">
+        <div
+          class="relative flex items-end gap-2 bg-zinc-950 border border-zinc-800 rounded-xl p-2 focus-within:ring-1 focus-within:ring-purple-500/50 focus-within:border-purple-500/50 transition-all shadow-lg">
+          <textarea id="chat-textarea"
+            class="w-full bg-transparent border-none focus:ring-0 text-sm text-zinc-200 placeholder-zinc-600 resize-none max-h-[120px] py-2"
+            rows="1" placeholder="Ask/Command... (Shift+Enter for newline)"></textarea>
+          <button id="btn-chat-send"
+            class="p-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors shadow-lg shadow-purple-900/20">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resize Handle -->
+    <div id="terminal-resizer" class="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-10"></div>
+  </div>
+
+  <!-- Howler.js for Audio Playback -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.3/howler.min.js"></script>
+  <script src="./renderer.js"></script>
+</body>
+
+</html>

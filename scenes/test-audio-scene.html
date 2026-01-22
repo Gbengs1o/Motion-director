@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>test-audio-scene</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; }
+        #stage {
+            width: 1920px; height: 1080px; background: #111; position: relative; overflow: hidden;
+            /* GPU HACK */
+            transform: translate3d(0,0,0);
+            backface-visibility: hidden;
+            perspective: 1000px;
+        }
+        .gpu { will-change: transform, opacity; }
+    </style>
+</head>
+<body>
+    <div id="stage">
+        <h1 id="title" style="color:white; position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); font-family:sans-serif; text-align:center;">
+            Scene: test-audio-scene<br>
+            <span style="font-size:0.5em; opacity:0.5">Edit this file to animate</span>
+        </h1>
+        <!-- Example Image Reference: <img src="../assets/test-audio-scene/my-image.png"> -->
+    </div>
+    <script>
+        const tl = gsap.timeline({ repeat: 0 });
+        window.masterTl = tl; // REQUIRED FOR HUD
+
+        // Example Animation
+        tl.to("#title", { scale: 1.2, duration: 1, ease: "power1.inOut" });
+    </script>
+</body>
+</html>
