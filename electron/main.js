@@ -1,8 +1,11 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const os = require('os');
-const pty = require('node-pty');
 const { startServer } = require('./server');
+
+try {
+    require('fs').appendFileSync(path.join(process.cwd(), '.motion-director-main-loaded.log'), `main loaded verify=${process.env.MOTION_DIRECTOR_VERIFY_RENDER || ''}\n`);
+} catch {}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -16,6 +19,7 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
         height: 800,
+        icon: path.join(__dirname, '../build/icon.ico'),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: false, // Allow Node.js in renderer
@@ -31,10 +35,24 @@ function createWindow() {
     if (process.env.NODE_ENV === 'development') {
         mainWindow.webContents.openDevTools();
     }
+
+    mainWindow.on('closed', () => {
+        console.log('[DEBUG] mainWindow closed');
+        mainWindow = null;
+    });
 }
 
 app.whenReady().then(() => {
     startServer(3000); // Start Preview Server
+    if (process.env.MOTION_DIRECTOR_VERIFY_RENDER === '1') {
+        runRenderVerification()
+            .then(() => app.quit())
+            .catch((error) => {
+                console.error(error);
+                app.exit(1);
+            });
+        return;
+    }
     createWindow();
 
     app.on('activate', () => {
@@ -45,9 +63,20 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+    console.log('[DEBUG] window-all-closed triggered');
+    if (renderEngine && renderEngine.isRendering) {
+        console.log('[DEBUG] Render in progress; keeping app alive');
+        return;
+    }
+
     if (process.platform !== 'darwin') {
+        console.log('[DEBUG] Quitting app from window-all-closed');
         app.quit();
     }
+});
+
+app.on('before-quit', () => {
+    console.log('[DEBUG] before-quit triggered');
 });
 
 // --- PTY Logic ---
@@ -56,6 +85,7 @@ let ptyProcess = null;
 ipcMain.on('terminal-init', (event, targetPath) => {
     if (ptyProcess) return;
 
+    const pty = require('node-pty');
     const CWD = targetPath || process.cwd();
 
     ptyProcess = pty.spawn(ptyShell, [], {
@@ -281,6 +311,44 @@ ipcMain.handle('list-assets', async (event, { workPath, sceneName }) => {
 // =============================================================================
 const RenderEngine = require('./renderEngine');
 let renderEngine = null;
+
+async function runRenderVerification() {
+    const outputPath = path.join(process.cwd(), '.render-test-output');
+    await fs.remove(outputPath);
+
+    const logPath = path.join(outputPath, 'verify-render.log');
+    const log = async (message) => {
+        await fs.ensureDir(outputPath);
+        await fs.appendFile(logPath, `${new Date().toISOString()} ${message}\n`);
+    };
+
+    await log('verify start');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const engine = new RenderEngine({
+        isDestroyed: () => false,
+        send: async (_channel, data) => {
+            await log(`progress ${JSON.stringify(data)}`);
+        }
+    });
+    renderEngine = engine;
+
+    const result = await engine.startRender({
+        sceneUrl: 'http://localhost:3000/scene/test-audio-scene.html',
+        outputPath,
+        sceneName: 'smoke-test',
+        format: 'mp4',
+        resolution: '320x180',
+        fps: 5,
+        startTime: 0,
+        duration: 0,
+        includeAudio: false,
+        audioPath: null
+    });
+
+    const stat = await fs.stat(result);
+    await log(`render verified ${result} ${stat.size}`);
+}
 
 ipcMain.handle('select-output-folder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {

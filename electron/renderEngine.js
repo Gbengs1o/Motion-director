@@ -5,7 +5,49 @@
 
 const path = require('path');
 const fs = require('fs-extra');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+
+function canRunExecutable(candidate) {
+    if (!candidate) return false;
+    if (candidate !== 'ffmpeg' && !fs.existsSync(candidate)) return false;
+
+    const result = spawnSync(candidate, ['-version'], {
+        stdio: 'ignore',
+        windowsHide: true,
+        timeout: 5000
+    });
+
+    return !result.error && result.status === 0;
+}
+
+function getFfmpegExecutable() {
+    if (process.env.FFMPEG_BIN && canRunExecutable(process.env.FFMPEG_BIN)) {
+        return process.env.FFMPEG_BIN;
+    }
+
+    const bundledCandidates = [
+        process.resourcesPath ? path.join(process.resourcesPath, 'ffmpeg.exe') : null,
+        path.join(__dirname, '../build/ffmpeg.exe')
+    ];
+
+    const bundledExecutable = bundledCandidates.find((candidate) => candidate && fs.existsSync(candidate));
+    if (bundledExecutable) {
+        return bundledExecutable;
+    }
+
+    const candidates = [];
+
+    try {
+        const staticPath = require('ffmpeg-static');
+        candidates.push(staticPath);
+        candidates.push(staticPath && staticPath.replace('app.asar', 'app.asar.unpacked'));
+    } catch {
+        // Fall back to a system FFmpeg below.
+    }
+
+    candidates.push('ffmpeg');
+    return candidates.find(canRunExecutable);
+}
 
 class RenderEngine {
     constructor(webContents) {
@@ -51,7 +93,6 @@ class RenderEngine {
         } = options;
 
         const [width, height] = resolution.split('x').map(Number);
-        const isVideo = ['mp4', 'webm'].includes(format);
         const isImageSequence = ['png', 'jpeg'].includes(format);
 
         // Create output directory
@@ -66,7 +107,9 @@ class RenderEngine {
             this.sendProgress({ status: 'preparing', percent: 0, label: 'Preparing render...' });
 
             // Calculate total frames
-            const totalDuration = duration || 10; // Default 10s if not specified
+            const totalDuration = duration > 0
+                ? duration
+                : await this.resolveSceneDuration(this.buildRenderUrl(sceneUrl), width, height);
             const totalFrames = Math.ceil(totalDuration * fps);
 
             this.sendProgress({
@@ -77,35 +120,23 @@ class RenderEngine {
                 totalFrames
             });
 
-            // Use timecut for frame capture
-            // Add ?render=true to trigger auto-play in scene
-            const renderUrl = sceneUrl + (sceneUrl.includes('?') ? '&' : '?') + 'render=true';
-            const timecutArgs = [
-                require.resolve('timecut/cli.js'),
-                renderUrl,
-                '--output', path.join(framesDir, 'frame-%05d.png'),
-                '--viewport', `${width},${height}`,
-                '--fps', fps.toString(),
-                '--start', startTime.toString(),
-                '--duration', totalDuration.toString(),
-                '--launch-arguments', '--no-sandbox --disable-setuid-sandbox'
-            ];
+            const ffmpegExecutable = getFfmpegExecutable();
 
-            // Run timecut
-            await this.runTimecutWithProgress(timecutArgs, totalFrames, framesDir);
-
-            if (this.shouldAbort) {
-                this.sendProgress({ status: 'aborted', percent: 0, label: 'Render cancelled' });
-                this.cleanup(outputDir);
-                return null;
+            if (!ffmpegExecutable) {
+                throw new Error('FFmpeg not found or could not be started. Reinstall Motion Director or set FFMPEG_BIN to a working ffmpeg.exe.');
             }
 
-            // For image sequence, we're done
             if (isImageSequence) {
-                // Rename/convert frames if needed
-                if (format === 'jpeg') {
-                    await this.convertFramesToJpeg(framesDir);
-                }
+                await this.captureFrames({
+                    sceneUrl: this.buildRenderUrl(sceneUrl),
+                    framesDir,
+                    frameFormat: format,
+                    width,
+                    height,
+                    fps,
+                    startTime,
+                    totalFrames
+                });
 
                 this.sendProgress({
                     status: 'complete',
@@ -118,18 +149,40 @@ class RenderEngine {
                 return framesDir;
             }
 
-            // For video, use FFmpeg to encode
-            this.sendProgress({ status: 'encoding', percent: 90, label: 'Encoding video...' });
-
             const outputFile = path.join(outputDir, `${sceneName}.${format}`);
-            await this.encodeVideo(framesDir, outputFile, format, fps, includeAudio, audioPath);
+            const silentOutputFile = includeAudio && audioPath ? path.join(outputDir, `${sceneName}.silent.${format}`) : outputFile;
+
+            await this.captureFrames({
+                sceneUrl: this.buildRenderUrl(sceneUrl),
+                framesDir,
+                frameFormat: 'png',
+                width,
+                height,
+                fps,
+                startTime,
+                totalFrames
+            });
+
+            this.sendProgress({ status: 'encoding', percent: 88, label: 'Encoding video...' });
+            await this.encodeVideo(framesDir, silentOutputFile, format, fps, ffmpegExecutable, width, height);
+
+            if (this.shouldAbort) {
+                this.sendProgress({ status: 'aborted', percent: 0, label: 'Render cancelled' });
+                this.cleanup(outputDir);
+                return null;
+            }
+
+            if (includeAudio && audioPath && fs.existsSync(audioPath)) {
+                this.sendProgress({ status: 'encoding', percent: 90, label: 'Muxing audio...' });
+                await this.muxAudio(silentOutputFile, outputFile, format, audioPath, ffmpegExecutable);
+                await fs.remove(silentOutputFile);
+            }
 
             if (this.shouldAbort) {
                 this.sendProgress({ status: 'aborted', percent: 0, label: 'Render cancelled' });
                 return null;
             }
 
-            // Clean up frames
             await fs.remove(framesDir);
 
             this.sendProgress({
@@ -154,101 +207,149 @@ class RenderEngine {
         }
     }
 
-    async runTimecutWithProgress(args, totalFrames, framesDir) {
-        return new Promise((resolve, reject) => {
-            const process = spawn('node', args, {
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
-
-            this.currentProcess = process;
-            let frameCount = 0;
-
-            // Check frame output periodically
-            const checkInterval = setInterval(async () => {
-                if (this.shouldAbort) {
-                    process.kill('SIGTERM');
-                    clearInterval(checkInterval);
-                    return;
-                }
-
-                try {
-                    const files = await fs.readdir(framesDir);
-                    const pngFiles = files.filter(f => f.endsWith('.png'));
-                    if (pngFiles.length > frameCount) {
-                        frameCount = pngFiles.length;
-                        const percent = Math.min(85, Math.round((frameCount / totalFrames) * 85));
-                        this.sendProgress({
-                            status: 'rendering',
-                            percent,
-                            label: 'Capturing frames...',
-                            currentFrame: frameCount,
-                            totalFrames
-                        });
-                    }
-                } catch (e) {
-                    // Ignore errors during check
-                }
-            }, 500);
-
-            process.on('close', (code) => {
-                clearInterval(checkInterval);
-                this.currentProcess = null;
-                if (code === 0 || this.shouldAbort) {
-                    resolve();
-                } else {
-                    reject(new Error(`Timecut exited with code ${code}`));
-                }
-            });
-
-            process.on('error', (err) => {
-                clearInterval(checkInterval);
-                this.currentProcess = null;
-                reject(err);
-            });
-
-            // Capture stderr for debugging
-            process.stderr.on('data', (data) => {
-                console.log('Timecut stderr:', data.toString());
-            });
-        });
+    buildRenderUrl(sceneUrl) {
+        return sceneUrl + (sceneUrl.includes('?') ? '&' : '?') + 'render=true';
     }
 
-    async encodeVideo(framesDir, outputFile, format, fps, includeAudio, audioPath) {
+    async resolveSceneDuration(sceneUrl, width, height) {
+        const { BrowserWindow } = require('electron');
+        const win = new BrowserWindow({
+            show: false,
+            width,
+            height,
+            useContentSize: true,
+            webPreferences: {
+                backgroundThrottling: false,
+                offscreen: true,
+                contextIsolation: true,
+                nodeIntegration: false
+            }
+        });
+
+        try {
+            win.webContents.setAudioMuted(true);
+            await win.loadURL(sceneUrl);
+            await this.waitForTimeline(win);
+            const duration = await win.webContents.executeJavaScript(`
+                Number(
+                    (window.sceneMetadata && window.sceneMetadata.totalDuration) ||
+                    (window.masterTl && window.masterTl.duration && window.masterTl.duration()) ||
+                    10
+                );
+            `);
+            return Number.isFinite(duration) && duration > 0 ? duration : 10;
+        } finally {
+            if (!win.isDestroyed()) {
+                win.destroy();
+            }
+        }
+    }
+
+    async captureFrames({ sceneUrl, framesDir, frameFormat, width, height, fps, startTime, totalFrames }) {
+        const { BrowserWindow } = require('electron');
+        if (!BrowserWindow) {
+            throw new Error('Electron BrowserWindow is unavailable. Render from the Motion Director app, not plain Node.');
+        }
+
+        const win = new BrowserWindow({
+            show: false,
+            width,
+            height,
+            useContentSize: true,
+            webPreferences: {
+                backgroundThrottling: false,
+                offscreen: true,
+                contextIsolation: true,
+                nodeIntegration: false
+            }
+        });
+
+        try {
+            win.webContents.setAudioMuted(true);
+            await win.loadURL(sceneUrl);
+            await this.waitForTimeline(win);
+
+            await win.webContents.executeJavaScript(`
+                if (window.Howler) {
+                    window.Howler.mute(true);
+                }
+                window.masterTl.pause(0);
+                true;
+            `);
+
+            const extension = frameFormat === 'jpeg' ? 'jpg' : 'png';
+            const screenshotType = frameFormat === 'jpeg' ? 'jpeg' : 'png';
+
+            for (let frame = 0; frame < totalFrames; frame++) {
+                if (this.shouldAbort) {
+                    break;
+                }
+
+                const currentTime = startTime + frame / fps;
+                await win.webContents.executeJavaScript(`
+                    window.masterTl.pause();
+                    window.masterTl.seek(${JSON.stringify(currentTime)}, false);
+                    window.dispatchEvent(new CustomEvent('motion-director:render-frame', { detail: { time: ${JSON.stringify(currentTime)} } }));
+                    true;
+                `);
+
+                const fileName = `frame-${String(frame + 1).padStart(5, '0')}.${extension}`;
+                const image = await win.webContents.capturePage();
+                const buffer = screenshotType === 'jpeg' ? image.toJPEG(92) : image.toPNG();
+                await fs.writeFile(path.join(framesDir, fileName), buffer);
+
+                this.sendProgress({
+                    status: 'rendering',
+                    percent: Math.min(85, Math.round(((frame + 1) / totalFrames) * 85)),
+                    label: 'Capturing frames...',
+                    currentFrame: frame + 1,
+                    totalFrames
+                });
+            }
+        } finally {
+            if (!win.isDestroyed()) {
+                win.destroy();
+            }
+        }
+    }
+
+    async waitForTimeline(win) {
+        const started = Date.now();
+        while (Date.now() - started < 15000) {
+            const ready = await win.webContents.executeJavaScript('Boolean(window.masterTl)');
+            if (ready) return;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        throw new Error('Scene did not expose window.masterTl within 15 seconds.');
+    }
+
+    async encodeVideo(framesDir, outputFile, format, fps, ffmpegExecutable, width, height) {
         return new Promise((resolve, reject) => {
+            const outputWidth = Math.max(2, Math.floor(width / 2) * 2);
+            const outputHeight = Math.max(2, Math.floor(height / 2) * 2);
             const ffmpegArgs = [
-                '-y', // Overwrite output
+                '-y',
                 '-framerate', fps.toString(),
-                '-i', path.join(framesDir, 'frame-%05d.png')
+                '-i', path.join(framesDir, 'frame-%05d.png'),
+                '-vf', `scale=${outputWidth}:${outputHeight}:flags=lanczos,setsar=1`
             ];
 
-            // Add audio if requested and available
-            if (includeAudio && audioPath && fs.existsSync(audioPath)) {
-                ffmpegArgs.push('-i', audioPath);
-                ffmpegArgs.push('-c:a', 'aac');
-                ffmpegArgs.push('-shortest');
-            }
-
-            // Video encoding options
             if (format === 'mp4') {
-                ffmpegArgs.push('-c:v', 'libx264');
-                ffmpegArgs.push('-pix_fmt', 'yuv420p');
-                ffmpegArgs.push('-preset', 'medium');
-                ffmpegArgs.push('-crf', '18');
+                ffmpegArgs.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '18');
             } else if (format === 'webm') {
-                ffmpegArgs.push('-c:v', 'libvpx-vp9');
-                ffmpegArgs.push('-b:v', '0');
-                ffmpegArgs.push('-crf', '30');
+                ffmpegArgs.push('-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30');
             }
 
             ffmpegArgs.push(outputFile);
 
-            const process = spawn('ffmpeg', ffmpegArgs, {
-                stdio: ['pipe', 'pipe', 'pipe']
+            const child = spawn(ffmpegExecutable, ffmpegArgs, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true
             });
 
-            this.currentProcess = process;
+            this.currentProcess = child;
 
-            process.on('close', (code) => {
+            child.on('close', (code) => {
                 this.currentProcess = null;
                 if (code === 0) {
                     resolve();
@@ -257,16 +358,67 @@ class RenderEngine {
                 }
             });
 
-            process.on('error', (err) => {
+            child.on('error', (err) => {
                 this.currentProcess = null;
-                if (err.code === 'ENOENT') {
-                    reject(new Error('FFmpeg not found. Please install FFmpeg and add it to your PATH.'));
+                if (err.code === 'ENOENT' || err.code === 'UNKNOWN') {
+                    reject(new Error('FFmpeg could not be started. Reinstall Motion Director or set FFMPEG_BIN to a working ffmpeg.exe.'));
                 } else {
                     reject(err);
                 }
             });
 
-            process.stderr.on('data', (data) => {
+            child.stderr.on('data', (data) => {
+                console.log('FFmpeg:', data.toString());
+            });
+        });
+    }
+
+    async muxAudio(videoPath, outputFile, format, audioPath, ffmpegExecutable) {
+        return new Promise((resolve, reject) => {
+            const ffmpegArgs = [
+                '-y',
+                '-i', videoPath,
+                '-i', audioPath,
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                '-c:v', 'copy',
+                '-shortest'
+            ];
+
+            if (format === 'mp4') {
+                ffmpegArgs.push('-c:a', 'aac');
+            } else if (format === 'webm') {
+                ffmpegArgs.push('-c:a', 'libopus');
+            }
+
+            ffmpegArgs.push(outputFile);
+
+            const child = spawn(ffmpegExecutable, ffmpegArgs, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true
+            });
+
+            this.currentProcess = child;
+
+            child.on('close', (code) => {
+                this.currentProcess = null;
+                if (code === 0) {
+                    resolve();
+                } else {
+                    reject(new Error(`FFmpeg exited with code ${code}`));
+                }
+            });
+
+            child.on('error', (err) => {
+                this.currentProcess = null;
+                if (err.code === 'ENOENT' || err.code === 'UNKNOWN') {
+                    reject(new Error('FFmpeg could not be started. Reinstall Motion Director or set FFMPEG_BIN to a working ffmpeg.exe.'));
+                } else {
+                    reject(err);
+                }
+            });
+
+            child.stderr.on('data', (data) => {
                 console.log('FFmpeg:', data.toString());
             });
         });

@@ -1,6 +1,8 @@
 node_modules
 dist
 dist-electron
+.runtime
+$targetDir
 *.log
 .DS_Store
 .env

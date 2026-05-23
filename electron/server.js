@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs');
 
@@ -424,12 +423,15 @@ function startServer(port = 3000) {
     return { app, server, io };
 }
 
-function setupWatcher() {
+async function setupWatcher() {
     if (WATCHER) WATCHER.close();
 
     // Watch 'scenes' folder for changes
     const watchPath = path.join(PROJECT_ROOT, 'scenes');
     if (!fs.existsSync(watchPath)) return;
+
+    const chokidarModule = await import('chokidar');
+    const chokidar = chokidarModule.default || chokidarModule;
 
     WATCHER = chokidar.watch(watchPath, {
         ignored: /(^|[\/\\])\../,

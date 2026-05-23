@@ -27,6 +27,7 @@ console.log('Button elements found:', {
 
 // --- State ---
 let currentWorkPath = null;
+let allSceneFiles = [];
 
 // --- Navigation Logic ---
 
@@ -44,9 +45,10 @@ async function refreshSceneList() {
 
     console.log("Refreshing scenes for:", currentWorkPath);
     const scenes = await ipcRenderer.invoke('list-scenes', currentWorkPath);
+    allSceneFiles = scenes.filter(scene => scene.endsWith('.html'));
 
     sceneListEl.innerHTML = '';
-    scenes.forEach(scene => {
+    allSceneFiles.forEach(scene => {
         const currentScene = scene; // Capture in closure
         const div = document.createElement('div');
         div.className = 'flex items-center justify-between px-2 py-1.5 rounded hover:bg-zinc-800 text-zinc-300 text-sm cursor-pointer group';
@@ -373,6 +375,14 @@ const timelineHandle = document.getElementById('timeline-handle');
 const btnSpeed = document.getElementById('btn-playback-speed');
 const speedText = document.getElementById('speed-text');
 const btnLoop = document.getElementById('btn-loop');
+const fullscreenControls = document.getElementById('fullscreen-controls');
+const fullscreenPlayBtn = document.getElementById('fullscreen-play-btn');
+const fullscreenTimeCurrent = document.getElementById('fullscreen-time-current');
+const fullscreenTimeTotal = document.getElementById('fullscreen-time-total');
+const fullscreenTimelineScrubber = document.getElementById('fullscreen-timeline-scrubber');
+const fullscreenTimelineProgress = document.getElementById('fullscreen-timeline-progress');
+const fullscreenTimelineHandle = document.getElementById('fullscreen-timeline-handle');
+const fullscreenExitBtn = document.getElementById('fullscreen-exit-btn');
 
 let isPlaying = false;
 let isLooping = false;
@@ -380,6 +390,8 @@ let sceneDuration = 0;
 let currentTime = 0;
 let currentSpeedIndex = 2; // Default to 1x (index 2 in [0.25, 0.5, 1, 1.5, 2])
 const speeds = [0.25, 0.5, 1, 1.5, 2];
+const playIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+const pauseIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
 
 // Format seconds to MM:SS
 function formatTime(seconds) {
@@ -388,19 +400,39 @@ function formatTime(seconds) {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+function updatePlaybackButtons() {
+    const icon = isPlaying ? pauseIconSvg : playIconSvg;
+    if (playBtn) playBtn.innerHTML = icon;
+    if (fullscreenPlayBtn) fullscreenPlayBtn.innerHTML = icon;
+}
+
+function updateTimelineDisplays(time) {
+    const safeDuration = sceneDuration || 0;
+    const safeTime = safeDuration ? Math.max(0, Math.min(Number(time) || 0, safeDuration)) : 0;
+    const progress = safeDuration ? (safeTime / safeDuration) * 100 : 0;
+
+    currentTime = safeTime;
+
+    if (timelineProgress) timelineProgress.style.width = `${progress}%`;
+    if (timelineHandle) timelineHandle.style.left = `${progress}%`;
+    if (timeCurrent) timeCurrent.textContent = formatTime(safeTime);
+
+    if (fullscreenTimelineProgress) fullscreenTimelineProgress.style.width = `${progress}%`;
+    if (fullscreenTimelineHandle) fullscreenTimelineHandle.style.left = `${progress}%`;
+    if (fullscreenTimeCurrent) fullscreenTimeCurrent.textContent = formatTime(safeTime);
+}
+
+function resetTimelineDisplays() {
+    updateTimelineDisplays(0);
+    if (timeTotal) timeTotal.textContent = formatTime(sceneDuration);
+    if (fullscreenTimeTotal) fullscreenTimeTotal.textContent = formatTime(sceneDuration);
+}
+
 // Update timeline UI based on received time
 function updateTimelineUI(time) {
     if (sceneDuration === 0) return;
 
-    currentTime = time;
-    const progress = (time / sceneDuration) * 100;
-
-    // Update progress bar and handle
-    timelineProgress.style.width = `${progress}%`;
-    timelineHandle.style.left = `${progress}%`;
-
-    // Update time display
-    timeCurrent.textContent = formatTime(time);
+    updateTimelineDisplays(time);
 
     // If playing and timeline reached the end
     if (isPlaying && time >= sceneDuration - 0.05) {
@@ -413,7 +445,7 @@ function updateTimelineUI(time) {
             }
         } else {
             isPlaying = false;
-            playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+            updatePlaybackButtons();
             // Also pause audio in joint mode
             if (isJointMode && audioPlayer && isAudioPlaying) {
                 pauseAudio();
@@ -439,12 +471,9 @@ window.addEventListener('message', (event) => {
         case 'scene-ready':
             console.log('Scene ready received:', data);
             sceneDuration = data.duration || 0;
-            timeTotal.textContent = formatTime(sceneDuration);
-            timeCurrent.textContent = '00:00';
-            timelineProgress.style.width = '0%';
-            timelineHandle.style.left = '0%';
+            resetTimelineDisplays();
             isPlaying = false;
-            playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+            updatePlaybackButtons();
             // Reset speed on new scene
             currentSpeedIndex = 2; // 1x
             if (speedText) speedText.textContent = '1x';
@@ -455,15 +484,12 @@ window.addEventListener('message', (event) => {
 
         case 'time-update':
             updateTimelineUI(data.currentTime);
+            syncAudioWithScene(data.currentTime || 0, data.isPlaying !== undefined ? Boolean(data.isPlaying) : isPlaying);
             // Sync play state if provided (but don't override loop auto-stop)
             if (data.isPlaying !== undefined) {
                 if (data.isPlaying !== isPlaying && currentTime < sceneDuration - 0.1) {
                     isPlaying = data.isPlaying;
-                    if (isPlaying) {
-                        playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
-                    } else {
-                        playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
-                    }
+                    updatePlaybackButtons();
                 }
             }
             break;
@@ -500,61 +526,90 @@ if (btnLoop) {
 }
 
 // Play button handler
-if (playBtn) {
-    playBtn.addEventListener('click', () => {
-        console.log('Play button clicked, isPlaying:', isPlaying);
-        if (isPlaying) {
-            sendToScene('pause');
-            isPlaying = false;
-            playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
-        } else {
-            sendToScene('play');
-            // If at end, restart
-            if (currentTime >= sceneDuration - 0.1) {
-                sendToScene('seek', { time: 0 });
-            }
-            isPlaying = true;
-            playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
+function toggleScenePlayback() {
+    console.log('Play toggled, isPlaying:', isPlaying);
+    if (isPlaying) {
+        sendToScene('pause');
+        isPlaying = false;
+        updatePlaybackButtons();
+        if (isJointMode && audioPlayer) {
+            pauseAudio();
         }
-    });
+        return;
+    }
+
+    sendToScene('play');
+    // If at end, restart
+    if (currentTime >= sceneDuration - 0.1) {
+        sendToScene('seek', { time: 0 });
+        if (isJointMode && audioPlayer) {
+            seekAudio(0);
+        }
+    }
+    isPlaying = true;
+    updatePlaybackButtons();
+    if (isJointMode && audioPlayer) {
+        playAudio();
+    }
+}
+
+if (playBtn) {
+    playBtn.addEventListener('click', toggleScenePlayback);
+}
+
+if (fullscreenPlayBtn) {
+    fullscreenPlayBtn.addEventListener('click', toggleScenePlayback);
 }
 
 // Scrubber click/drag for seeking
-if (timelineScrubber) {
-    let isScrubbing = false;
+let isScrubbingTimeline = false;
+let activeTimelineScrubber = null;
 
-    function seekToPosition(e) {
-        if (sceneDuration === 0) return;
+function seekSceneFromScrubber(scrubber, e) {
+    if (!scrubber || sceneDuration === 0) return;
 
-        const rect = timelineScrubber.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const progress = Math.max(0, Math.min(1, x / rect.width));
-        const seekTime = progress * sceneDuration;
+    const rect = scrubber.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const progress = Math.max(0, Math.min(1, x / rect.width));
+    const seekTime = progress * sceneDuration;
 
-        sendToScene('seek', { time: seekTime });
-        updateTimelineUI(seekTime);
-
-        if (isPlaying) {
-            isPlaying = false;
-            playBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
-        }
+    sendToScene('seek', { time: seekTime });
+    updateTimelineUI(seekTime);
+    if (isJointMode && audioPlayer) {
+        seekAudio(seekTime);
     }
 
-    timelineScrubber.addEventListener('mousedown', (e) => {
-        isScrubbing = true;
-        seekToPosition(e);
-    });
-
-    window.addEventListener('mousemove', (e) => {
-        if (isScrubbing) {
-            seekToPosition(e);
+    if (isPlaying) {
+        isPlaying = false;
+        updatePlaybackButtons();
+        if (isJointMode && audioPlayer) {
+            pauseAudio();
         }
-    });
+    }
+}
 
-    window.addEventListener('mouseup', () => {
-        isScrubbing = false;
+function attachTimelineScrubber(scrubber) {
+    if (!scrubber) return;
+    scrubber.addEventListener('mousedown', (e) => {
+        isScrubbingTimeline = true;
+        activeTimelineScrubber = scrubber;
+        seekSceneFromScrubber(scrubber, e);
     });
 }
+
+attachTimelineScrubber(timelineScrubber);
+attachTimelineScrubber(fullscreenTimelineScrubber);
+
+window.addEventListener('mousemove', (e) => {
+    if (isScrubbingTimeline) {
+        seekSceneFromScrubber(activeTimelineScrubber, e);
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    isScrubbingTimeline = false;
+    activeTimelineScrubber = null;
+});
 
 // Reset UI when iframe loads
 previewFrame.addEventListener('load', () => {
@@ -641,6 +696,22 @@ if (btnFullscreen) {
     console.error('btnFullscreen not found!');
 }
 
+function updateFullscreenControlsVisibility() {
+    const isPreviewFullscreen = document.fullscreenElement === previewContainer;
+    if (fullscreenControls) {
+        fullscreenControls.classList.toggle('hidden', !isPreviewFullscreen);
+    }
+}
+
+if (fullscreenExitBtn) {
+    fullscreenExitBtn.addEventListener('click', () => {
+        if (document.fullscreenElement) {
+            document.exitFullscreen();
+        }
+    });
+}
+
+document.addEventListener('fullscreenchange', updateFullscreenControlsVisibility);
 
 // Manual Panning (Drag)
 let isDragPanning = false;
@@ -1161,6 +1232,7 @@ const audioScrubber = document.getElementById('audio-scrubber');
 const audioScrubberTooltip = document.getElementById('audio-scrubber-tooltip');
 const audioMarkerTrack = document.getElementById('audio-marker-track');
 const btnAddAudio = document.getElementById('btn-add-audio');
+const btnRemoveAudio = document.getElementById('btn-remove-audio');
 const btnAudioPlay = document.getElementById('btn-audio-play');
 const audioPlayIcon = document.getElementById('audio-play-icon');
 const audioPauseIcon = document.getElementById('audio-pause-icon');
@@ -1186,12 +1258,18 @@ function formatTimeShort(seconds) {
     return seconds.toFixed(1) + 's';
 }
 
+function clampAudioTime(time) {
+    if (!audioDuration) return 0;
+    return Math.max(0, Math.min(Number(time) || 0, audioDuration));
+}
+
 // --- Audio Loading ---
 function loadAudioFile(filePath) {
     if (audioPlayer) {
         audioPlayer.unload();
         cancelAnimationFrame(audioAnimationFrame);
     }
+    isAudioPlaying = false;
 
     audioFilePath = filePath;
     audioMarkers = [];
@@ -1211,18 +1289,39 @@ function loadAudioFile(filePath) {
             // Show player, hide drop zone
             audioDropZone.classList.add('hidden');
             audioPlayerContainer.classList.remove('hidden');
+            if (btnRemoveAudio) {
+                btnRemoveAudio.classList.remove('hidden');
+            }
 
             updateAudioScrubberPosition(0);
             renderMarkers();
             console.log('Audio loaded:', filePath, 'Duration:', audioDuration);
         },
+        onplay: function () {
+            isAudioPlaying = true;
+            updateAudioPlayIcon();
+            startAudioProgressLoop();
+        },
+        onpause: function () {
+            isAudioPlaying = false;
+            updateAudioPlayIcon();
+            cancelAnimationFrame(audioAnimationFrame);
+        },
+        onstop: function () {
+            isAudioPlaying = false;
+            updateAudioPlayIcon();
+            cancelAnimationFrame(audioAnimationFrame);
+        },
         onend: function () {
             isAudioPlaying = false;
             updateAudioPlayIcon();
+            updateAudioScrubberPosition(audioDuration);
+            cancelAnimationFrame(audioAnimationFrame);
         },
         onloaderror: function (id, err) {
             console.error('Audio load error:', err);
             alert('Failed to load audio file.');
+            removeAudio();
         }
     });
 
@@ -1235,6 +1334,11 @@ function playAudio() {
     if (!audioPlayer) return;
     // Prevent double-play glitch
     if (isAudioPlaying) return;
+    if (audioDuration && (audioPlayer.seek() || 0) >= audioDuration - 0.05) {
+        audioPlayer.seek(0);
+        updateAudioScrubberPosition(0);
+    }
+    audioPlayer.rate(speeds[currentSpeedIndex] || 1);
     audioPlayer.play();
     isAudioPlaying = true;
     updateAudioPlayIcon();
@@ -1251,11 +1355,13 @@ function pauseAudio() {
 
 function seekAudio(time) {
     if (!audioPlayer) return;
-    audioPlayer.seek(time);
-    updateAudioScrubberPosition(time);
+    const nextTime = clampAudioTime(time);
+    audioPlayer.seek(nextTime);
+    updateAudioScrubberPosition(nextTime);
 }
 
 function updateAudioPlayIcon() {
+    if (!audioPlayIcon || !audioPauseIcon) return;
     if (isAudioPlaying) {
         audioPlayIcon.classList.add('hidden');
         audioPauseIcon.classList.remove('hidden');
@@ -1266,6 +1372,7 @@ function updateAudioPlayIcon() {
 }
 
 function startAudioProgressLoop() {
+    cancelAnimationFrame(audioAnimationFrame);
     function update() {
         if (!audioPlayer || !isAudioPlaying) return;
         const currentTime = audioPlayer.seek() || 0;
@@ -1277,11 +1384,41 @@ function startAudioProgressLoop() {
 
 function updateAudioScrubberPosition(time) {
     if (!audioDuration) return;
-    const percent = (time / audioDuration) * 100;
+    const safeTime = clampAudioTime(time);
+    const percent = (safeTime / audioDuration) * 100;
     audioProgressFill.style.width = percent + '%';
     audioScrubber.style.left = 'calc(' + percent + '% - 6px)';
-    audioCurrentTimeEl.textContent = formatTime(time);
-    audioScrubberTooltip.textContent = formatTimeShort(time);
+    audioCurrentTimeEl.textContent = formatTime(safeTime);
+    audioScrubberTooltip.textContent = formatTimeShort(safeTime);
+}
+
+function removeAudio() {
+    if (audioPlayer) {
+        audioPlayer.unload();
+    }
+    cancelAnimationFrame(audioAnimationFrame);
+
+    audioPlayer = null;
+    audioFilePath = null;
+    audioDuration = 0;
+    audioMarkers = [];
+    selectedMarkerIds = [];
+    markerIdCounter = 0;
+    isAudioPlaying = false;
+
+    if (audioFilenameEl) audioFilenameEl.textContent = '';
+    if (audioDurationEl) audioDurationEl.textContent = '00:00';
+    if (audioCurrentTimeEl) audioCurrentTimeEl.textContent = '00:00';
+    if (audioTotalTimeEl) audioTotalTimeEl.textContent = '00:00';
+    if (audioProgressFill) audioProgressFill.style.width = '0%';
+    if (audioScrubber) audioScrubber.style.left = '0%';
+    if (audioScrubberTooltip) audioScrubberTooltip.textContent = '0.0s';
+    if (audioMarkerTrack) audioMarkerTrack.innerHTML = '';
+    if (markerDurationDisplay) markerDurationDisplay.classList.add('hidden');
+    if (audioPlayerContainer) audioPlayerContainer.classList.add('hidden');
+    if (audioDropZone) audioDropZone.classList.remove('hidden');
+    if (btnRemoveAudio) btnRemoveAudio.classList.add('hidden');
+    updateAudioPlayIcon();
 }
 
 // --- Audio Scrubber Dragging ---
@@ -1405,6 +1542,7 @@ function setJointMode(enabled) {
         jointModeLabel.textContent = 'Joint';
         btnAudioJointMode.classList.remove('bg-zinc-800', 'border-zinc-700', 'text-zinc-400');
         btnAudioJointMode.classList.add('bg-purple-600', 'border-purple-500', 'text-white');
+        syncAudioWithScene(currentTime, isPlaying, true);
     } else {
         jointModeLabel.textContent = 'Non-Joint';
         btnAudioJointMode.classList.add('bg-zinc-800', 'border-zinc-700', 'text-zinc-400');
@@ -1413,18 +1551,24 @@ function setJointMode(enabled) {
 }
 
 // Sync audio with scene timeline (called when joint mode is ON)
-function syncAudioWithScene(time, isPlaying) {
+function syncAudioWithScene(time, sceneIsPlaying, forceSeek = false) {
     if (!isJointMode || !audioPlayer) return;
 
+    const sceneTime = clampAudioTime(time);
+    const scenePastAudioEnd = audioDuration > 0 && time >= audioDuration - 0.05;
     const currentAudioTime = audioPlayer.seek() || 0;
     // Only seek if difference is significant (avoid micro-jitter)
-    if (Math.abs(currentAudioTime - time) > 0.1) {
-        seekAudio(time);
+    if (forceSeek || Math.abs(currentAudioTime - sceneTime) > 0.15) {
+        seekAudio(sceneTime);
     }
 
-    if (isPlaying && !isAudioPlaying) {
+    audioPlayer.rate(speeds[currentSpeedIndex] || 1);
+
+    if (sceneIsPlaying && !isAudioPlaying && !scenePastAudioEnd) {
         playAudio();
-    } else if (!isPlaying && isAudioPlaying) {
+    } else if (!sceneIsPlaying && isAudioPlaying) {
+        pauseAudio();
+    } else if (scenePastAudioEnd && isAudioPlaying) {
         pauseAudio();
     }
 }
@@ -1437,6 +1581,14 @@ if (btnAddAudio) {
         const result = await ipcRenderer.invoke('open-file-dialog');
         if (!result.canceled && result.filePaths.length > 0) {
             loadAudioFile(result.filePaths[0]);
+        }
+    });
+}
+
+if (btnRemoveAudio) {
+    btnRemoveAudio.addEventListener('click', () => {
+        if (audioPlayer && confirm('Remove the current audio track?')) {
+            removeAudio();
         }
     });
 }
@@ -1555,45 +1707,6 @@ if (audioVolumeSlider) {
     });
 }
 
-// --- Integration with Scene Timeline ---
-// Hook into the existing scene time-update listener to sync audio in joint mode
-window.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'time-update' && isJointMode && audioPlayer) {
-        const sceneTime = event.data.currentTime || 0;
-        const currentAudioTime = audioPlayer.seek() || 0;
-        // Only seek if difference is significant (avoid micro-jitter)
-        if (Math.abs(currentAudioTime - sceneTime) > 0.15) {
-            audioPlayer.seek(sceneTime);
-            updateAudioScrubberPosition(sceneTime);
-        }
-    }
-});
-
-// Hook scene play/pause into audio
-if (playBtn) {
-    playBtn.addEventListener('click', () => {
-        // After scene play/pause, sync audio in joint mode
-        setTimeout(() => {
-            if (isJointMode && audioPlayer) {
-                if (isPlaying) {
-                    if (!isAudioPlaying) playAudio();
-                } else {
-                    if (isAudioPlaying) pauseAudio();
-                }
-            }
-        }, 50);
-    });
-}
-
-// Hook scene scrubber into audio (when user drags scene timeline)
-if (timelineScrubber) {
-    timelineScrubber.addEventListener('mousedown', () => {
-        if (isJointMode && audioPlayer) {
-            // Will sync on time-update messages
-        }
-    });
-}
-
 console.log('Audio Track Module initialized');
 
 // =============================================================================
@@ -1616,6 +1729,12 @@ const btnSelectOutput = document.getElementById('btn-select-output');
 const btnRenderCancel = document.getElementById('btn-render-cancel');
 const btnRenderStart = document.getElementById('btn-render-start');
 const renderOutputName = document.getElementById('render-output-name');
+const renderOutputNameRow = document.getElementById('render-output-name-row');
+const renderScope = document.getElementById('render-scope');
+const renderScenePicker = document.getElementById('render-scene-picker');
+const renderSceneList = document.getElementById('render-scene-list');
+const btnRenderSelectAll = document.getElementById('btn-render-select-all');
+const btnRenderSelectNone = document.getElementById('btn-render-select-none');
 
 // Progress Popup Elements
 const renderProgressPopup = document.getElementById('render-progress-popup');
@@ -1633,11 +1752,118 @@ const renderMiniPercent = document.getElementById('render-mini-percent');
 // --- Render State ---
 let renderIncludeAudio = true;
 let renderOutputFolder = '';
+let renderBatchActive = false;
+let renderBatchCancelled = false;
+let renderQueueIndex = 0;
+let renderQueueTotal = 0;
+let lastRenderOutputPath = null;
+
+function sceneFileToName(sceneFile) {
+    return sceneFile.replace(/\.html$/i, '');
+}
+
+function getSceneLabel(sceneFile) {
+    return sceneFileToName(sceneFile);
+}
+
+function getRenderSceneFiles() {
+    const scope = renderScope ? renderScope.value : 'current';
+    if (scope === 'all') {
+        return [...allSceneFiles];
+    }
+    if (scope === 'selected') {
+        return Array.from(document.querySelectorAll('.render-scene-checkbox:checked')).map(input => input.value);
+    }
+    return activeSceneName ? [`${activeSceneName}.html`] : [];
+}
+
+function renderSceneChecklist() {
+    if (!renderSceneList) return;
+
+    renderSceneList.innerHTML = '';
+    if (allSceneFiles.length === 0) {
+        renderSceneList.innerHTML = '<div class="text-xs text-zinc-600 text-center py-3">No scenes found</div>';
+        return;
+    }
+
+    allSceneFiles.forEach(sceneFile => {
+        const sceneName = getSceneLabel(sceneFile);
+        const row = document.createElement('label');
+        row.className = 'flex items-center gap-2 text-xs text-zinc-300 hover:bg-zinc-900 rounded px-2 py-1 cursor-pointer';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'render-scene-checkbox accent-purple-500';
+        input.value = sceneFile;
+        input.checked = sceneName === activeSceneName;
+        const label = document.createElement('span');
+        label.className = 'truncate';
+        label.textContent = sceneName;
+        row.appendChild(input);
+        row.appendChild(label);
+        renderSceneList.appendChild(row);
+    });
+}
+
+function updateRenderScopeUI() {
+    const scope = renderScope ? renderScope.value : 'current';
+    const isBatch = scope !== 'current';
+    if (renderScenePicker) {
+        renderScenePicker.classList.toggle('hidden', !isBatch);
+    }
+    if (renderOutputNameRow) {
+        renderOutputNameRow.classList.toggle('hidden', isBatch);
+    }
+    if (renderOutputName) {
+        renderOutputName.disabled = isBatch;
+    }
+    if (isBatch && renderDuration && Number(renderDuration.value) === sceneDuration) {
+        renderDuration.value = 0;
+    }
+    if (btnRenderStart) {
+        btnRenderStart.textContent = isBatch ? 'Start Batch Render' : 'Start Render';
+    }
+
+    renderSceneChecklist();
+    if (scope === 'all') {
+        document.querySelectorAll('.render-scene-checkbox').forEach(input => {
+            input.checked = true;
+            input.disabled = true;
+        });
+    } else {
+        document.querySelectorAll('.render-scene-checkbox').forEach(input => {
+            input.disabled = false;
+        });
+    }
+}
+
+function selectRenderScenes(checked) {
+    document.querySelectorAll('.render-scene-checkbox').forEach(input => {
+        if (!input.disabled) input.checked = checked;
+    });
+}
+
+function createRenderOptions(sceneName, outputName) {
+    const isVideo = ['mp4', 'webm'].includes(renderFormat.value);
+    const requestedDuration = parseFloat(renderDuration.value) || 0;
+
+    return {
+        sceneUrl: `http://localhost:3000/scene/${sceneName}.html`,
+        outputPath: renderOutputFolder,
+        sceneName: outputName,
+        format: renderFormat.value,
+        resolution: renderResolution.value,
+        fps: parseInt(renderFps.value),
+        startTime: parseFloat(renderStart.value) || 0,
+        duration: requestedDuration,
+        includeAudio: !renderBatchActive && renderIncludeAudio && isVideo,
+        audioPath: !renderBatchActive ? (audioFilePath || null) : null
+    };
+}
 
 // --- Open Render Modal ---
 if (btnRender) {
     btnRender.addEventListener('click', () => {
-        if (!activeSceneName) {
+        if (!activeSceneName && allSceneFiles.length === 0) {
             alert('Please select a scene first.');
             return;
         }
@@ -1654,6 +1880,10 @@ if (btnRender) {
             renderOutputFolder = currentWorkPath;
             renderOutputPath.value = currentWorkPath;
         }
+        if (renderScope) {
+            renderScope.value = 'current';
+        }
+        updateRenderScopeUI();
         renderModal.classList.remove('hidden');
     });
 }
@@ -1702,6 +1932,18 @@ if (renderFormat) {
     });
 }
 
+if (renderScope) {
+    renderScope.addEventListener('change', updateRenderScopeUI);
+}
+
+if (btnRenderSelectAll) {
+    btnRenderSelectAll.addEventListener('click', () => selectRenderScenes(true));
+}
+
+if (btnRenderSelectNone) {
+    btnRenderSelectNone.addEventListener('click', () => selectRenderScenes(false));
+}
+
 // --- Select Output Folder ---
 if (btnSelectOutput) {
     btnSelectOutput.addEventListener('click', async () => {
@@ -1716,8 +1958,9 @@ if (btnSelectOutput) {
 // --- Start Render ---
 if (btnRenderStart) {
     btnRenderStart.addEventListener('click', async () => {
-        if (!activeSceneName) {
-            alert('No scene selected.');
+        const sceneFiles = getRenderSceneFiles();
+        if (sceneFiles.length === 0) {
+            alert('No scenes selected.');
             return;
         }
         if (!renderOutputFolder) {
@@ -1725,38 +1968,70 @@ if (btnRenderStart) {
             return;
         }
 
-        const outputName = (renderOutputName && renderOutputName.value.trim()) || activeSceneName;
-
-        const options = {
-            sceneUrl: `http://localhost:3000/scene/${activeSceneName}.html`,
-            outputPath: renderOutputFolder,
-            sceneName: outputName,
-            format: renderFormat.value,
-            resolution: renderResolution.value,
-            fps: parseInt(renderFps.value),
-            startTime: parseFloat(renderStart.value) || 0,
-            duration: parseFloat(renderDuration.value) || sceneDuration || 10,
-            includeAudio: renderIncludeAudio && ['mp4', 'webm'].includes(renderFormat.value),
-            audioPath: audioFilePath || null
-        };
+        const scope = renderScope ? renderScope.value : 'current';
+        const isBatch = scope !== 'current' || sceneFiles.length > 1;
+        const failures = [];
 
         // Close modal, show progress popup
         renderModal.classList.add('hidden');
         showRenderProgress();
 
-        // Lock the scene being rendered
-        renderingSceneName = activeSceneName;
+        renderBatchActive = isBatch;
+        renderBatchCancelled = false;
+        renderQueueTotal = sceneFiles.length;
+        renderQueueIndex = 0;
+        lastRenderOutputPath = null;
+
+        for (let i = 0; i < sceneFiles.length; i++) {
+            if (renderBatchCancelled) break;
+
+            const sceneName = sceneFileToName(sceneFiles[i]);
+            const outputName = isBatch ? sceneName : ((renderOutputName && renderOutputName.value.trim()) || sceneName);
+            const options = createRenderOptions(sceneName, outputName);
+
+            renderQueueIndex = i + 1;
+            renderingSceneName = sceneName;
+            updateSceneListRenderLock();
+
+            renderProgressLabel.textContent = isBatch
+                ? `Rendering ${renderQueueIndex}/${renderQueueTotal}: ${sceneName}`
+                : 'Preparing...';
+
+            const result = await ipcRenderer.invoke('start-render', options);
+            if (!result.success) {
+                failures.push({ sceneName, error: result.error });
+                break;
+            }
+            lastRenderOutputPath = result.outputPath || lastRenderOutputPath;
+        }
+
+        renderBatchActive = false;
+        renderingSceneName = null;
         updateSceneListRenderLock();
 
-        // Start render
-        const result = await ipcRenderer.invoke('start-render', options);
-
-        if (!result.success) {
-            alert('Render failed: ' + result.error);
-            hideRenderProgress();
-            renderingSceneName = null;
-            updateSceneListRenderLock();
+        if (renderBatchCancelled) {
+            renderProgressLabel.textContent = 'Render cancelled';
+            setTimeout(hideRenderProgress, 1000);
+            return;
         }
+
+        if (failures.length > 0) {
+            const firstFailure = failures[0];
+            alert(`Render failed for ${firstFailure.sceneName}: ${firstFailure.error}`);
+            hideRenderProgress();
+            return;
+        }
+
+        if (!isBatch) {
+            return;
+        }
+
+        renderProgressLabel.textContent = isBatch ? `Batch render complete (${sceneFiles.length})` : 'Render complete!';
+        renderTimeEstimate.textContent = '';
+        if (lastRenderOutputPath && confirm(isBatch ? 'Batch render complete! Open output folder?' : 'Render complete! Open output folder?')) {
+            ipcRenderer.invoke('open-render-output', lastRenderOutputPath);
+        }
+        hideRenderProgress();
     });
 }
 
@@ -1821,6 +2096,7 @@ if (renderProgressMinimized) {
 if (btnRenderAbort) {
     btnRenderAbort.addEventListener('click', async () => {
         if (confirm('Cancel the current render?')) {
+            renderBatchCancelled = true;
             await ipcRenderer.invoke('abort-render');
         }
     });
@@ -1833,7 +2109,9 @@ ipcRenderer.on('render-progress', (event, data) => {
     renderProgressBar.style.width = percent + '%';
     renderProgressPercent.textContent = percent + '%';
     renderMiniPercent.textContent = percent + '%';
-    renderProgressLabel.textContent = label || status;
+    renderProgressLabel.textContent = renderBatchActive
+        ? `${renderQueueIndex}/${renderQueueTotal} ${renderingSceneName || ''}: ${label || status}`
+        : (label || status);
 
     if (currentFrame !== undefined && totalFrames !== undefined) {
         renderFrameInfo.textContent = `Frame ${currentFrame} / ${totalFrames}`;
@@ -1851,6 +2129,10 @@ ipcRenderer.on('render-progress', (event, data) => {
     }
 
     if (status === 'complete') {
+        if (renderBatchActive) {
+            return;
+        }
+
         renderProgressLabel.textContent = '✅ Render complete!';
         renderTimeEstimate.textContent = '';
 
@@ -1866,6 +2148,10 @@ ipcRenderer.on('render-progress', (event, data) => {
             hideRenderProgress();
         }, 1000);
     } else if (status === 'error' || status === 'aborted') {
+        if (renderBatchActive) {
+            return;
+        }
+
         // Clear scene lock on error/abort
         renderingSceneName = null;
         updateSceneListRenderLock();
