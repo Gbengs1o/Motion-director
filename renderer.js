@@ -28,6 +28,26 @@ console.log('Button elements found:', {
 // --- State ---
 let currentWorkPath = null;
 let allSceneFiles = [];
+let previewServerUrl = 'http://127.0.0.1:3000';
+let previewServerUrlPromise = ipcRenderer.invoke('get-preview-server-url')
+    .then((url) => {
+        if (url) {
+            previewServerUrl = url.replace(/\/$/, '');
+        }
+        return previewServerUrl;
+    })
+    .catch((error) => {
+        console.error('Failed to resolve preview server URL:', error);
+        return previewServerUrl;
+    });
+
+async function ensurePreviewServerUrl() {
+    return previewServerUrlPromise;
+}
+
+function getPreviewUrl(path) {
+    return `${previewServerUrl}${path}`;
+}
 
 // --- Navigation Logic ---
 
@@ -65,11 +85,17 @@ async function refreshSceneList() {
 
         // Click on Name -> Open Scene
         const nameEl = div.querySelector('div');
-        nameEl.addEventListener('click', () => {
+        nameEl.addEventListener('click', async () => {
             activeSceneName = currentScene.replace('.html', ''); // Set Active Scene
             const previewFrame = document.getElementById('preview-frame');
+            await ensurePreviewServerUrl();
+            isPlaying = false;
+            sceneDuration = 0;
+            currentTime = 0;
+            updatePlaybackButtons();
+            resetTimelineDisplays();
             // Use preview server instead of file:// for proper cross-origin access
-            previewFrame.src = `http://localhost:3000/scene/${currentScene}`;
+            previewFrame.src = getPreviewUrl(`/scene/${currentScene}`);
 
             // Visual feedback for selection
             document.querySelectorAll('#scene-list > div').forEach(el => el.classList.remove('bg-zinc-800', 'border-l-2', 'border-blue-500'));
@@ -98,7 +124,8 @@ async function refreshSceneList() {
 // Set the project root on the preview server
 async function setProjectRoot(path) {
     try {
-        const response = await fetch('http://localhost:3000/api/set-project-root', {
+        await ensurePreviewServerUrl();
+        const response = await fetch(getPreviewUrl('/api/set-project-root'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path })
@@ -173,6 +200,133 @@ if (btnNewScene) {
 
 // --- Asset Management Logic ---
 let activeSceneName = null; // Track currently selected/playing scene
+
+// --- Scene Code Editor Logic ---
+const btnEdit = document.getElementById('btn-edit');
+const codeEditorModal = document.getElementById('code-editor-modal');
+const codeEditorTextarea = document.getElementById('code-editor-textarea');
+const codeEditorFile = document.getElementById('code-editor-file');
+const codeEditorStatus = document.getElementById('code-editor-status');
+const codeEditorCount = document.getElementById('code-editor-count');
+const btnCodeEditorClose = document.getElementById('btn-code-editor-close');
+const btnCodeEditorSave = document.getElementById('btn-code-editor-save');
+const btnCodeEditorReload = document.getElementById('btn-code-editor-reload');
+let codeEditorSceneName = null;
+let codeEditorDirty = false;
+
+function setCodeEditorStatus(text, tone = 'muted') {
+    if (!codeEditorStatus) return;
+    codeEditorStatus.textContent = text || '';
+    codeEditorStatus.classList.remove('text-zinc-500', 'text-green-400', 'text-red-400', 'text-yellow-400');
+    const toneClass = {
+        success: 'text-green-400',
+        error: 'text-red-400',
+        warning: 'text-yellow-400',
+        muted: 'text-zinc-500'
+    }[tone] || 'text-zinc-500';
+    codeEditorStatus.classList.add(toneClass);
+}
+
+function updateCodeEditorCount() {
+    if (!codeEditorTextarea || !codeEditorCount) return;
+    const lineCount = codeEditorTextarea.value ? codeEditorTextarea.value.split('\n').length : 0;
+    codeEditorCount.textContent = `${lineCount} line${lineCount === 1 ? '' : 's'}`;
+}
+
+async function loadSceneCode(sceneName) {
+    if (!currentWorkPath || !sceneName) return;
+    setCodeEditorStatus('Loading...', 'muted');
+
+    const result = await ipcRenderer.invoke('read-scene-code', {
+        workPath: currentWorkPath,
+        sceneName
+    });
+
+    if (!result.success) {
+        setCodeEditorStatus(result.error || 'Failed to load scene', 'error');
+        return;
+    }
+
+    codeEditorSceneName = sceneName;
+    codeEditorTextarea.value = result.code;
+    codeEditorFile.textContent = result.filePath || result.fileName || sceneName;
+    codeEditorDirty = false;
+    updateCodeEditorCount();
+    setCodeEditorStatus('Loaded', 'success');
+    setTimeout(() => {
+        if (!codeEditorDirty) setCodeEditorStatus('', 'muted');
+    }, 1200);
+}
+
+async function openCodeEditor() {
+    if (!activeSceneName) {
+        alert('Please select a scene first.');
+        return;
+    }
+
+    codeEditorModal.classList.remove('hidden');
+    await loadSceneCode(activeSceneName);
+    codeEditorTextarea.focus();
+}
+
+async function saveSceneCode() {
+    if (!codeEditorSceneName || !currentWorkPath) return;
+    setCodeEditorStatus('Saving...', 'muted');
+
+    const result = await ipcRenderer.invoke('save-scene-code', {
+        workPath: currentWorkPath,
+        sceneName: codeEditorSceneName,
+        code: codeEditorTextarea.value
+    });
+
+    if (!result.success) {
+        setCodeEditorStatus(result.error || 'Save failed', 'error');
+        return;
+    }
+
+    codeEditorDirty = false;
+    setCodeEditorStatus('Saved', 'success');
+    if (previewFrame && activeSceneName === codeEditorSceneName) {
+        await ensurePreviewServerUrl();
+        previewFrame.src = getPreviewUrl(`/scene/${codeEditorSceneName}.html?t=${Date.now()}`);
+    }
+}
+
+function closeCodeEditor() {
+    if (codeEditorDirty && !confirm('Close without saving your scene changes?')) {
+        return;
+    }
+
+    codeEditorModal.classList.add('hidden');
+    codeEditorSceneName = null;
+    codeEditorDirty = false;
+    setCodeEditorStatus('', 'muted');
+}
+
+btnEdit?.addEventListener('click', openCodeEditor);
+btnCodeEditorClose?.addEventListener('click', closeCodeEditor);
+btnCodeEditorSave?.addEventListener('click', saveSceneCode);
+btnCodeEditorReload?.addEventListener('click', () => {
+    if (!codeEditorSceneName) return;
+    if (codeEditorDirty && !confirm('Reload and discard unsaved scene changes?')) {
+        return;
+    }
+    loadSceneCode(codeEditorSceneName);
+});
+
+codeEditorTextarea?.addEventListener('input', () => {
+    codeEditorDirty = true;
+    updateCodeEditorCount();
+    setCodeEditorStatus('Unsaved changes', 'warning');
+});
+
+codeEditorTextarea?.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveSceneCode();
+    }
+});
+
 const assetsModal = document.getElementById('assets-modal');
 const btnAssets = document.getElementById('btn-assets');
 const btnCloseAssets = document.getElementById('btn-close-assets');
@@ -528,6 +682,11 @@ if (btnLoop) {
 // Play button handler
 function toggleScenePlayback() {
     console.log('Play toggled, isPlaying:', isPlaying);
+    if (!activeSceneName) {
+        alert('Please select a scene first.');
+        return;
+    }
+
     if (isPlaying) {
         sendToScene('pause');
         isPlaying = false;
@@ -538,14 +697,14 @@ function toggleScenePlayback() {
         return;
     }
 
-    sendToScene('play');
     // If at end, restart
-    if (currentTime >= sceneDuration - 0.1) {
+    if (sceneDuration > 0 && currentTime >= sceneDuration - 0.1) {
         sendToScene('seek', { time: 0 });
         if (isJointMode && audioPlayer) {
             seekAudio(0);
         }
     }
+    sendToScene('play');
     isPlaying = true;
     updatePlaybackButtons();
     if (isJointMode && audioPlayer) {
@@ -1725,6 +1884,7 @@ const renderAudioRow = document.getElementById('render-audio-row');
 const renderAudioToggle = document.getElementById('render-audio-toggle');
 const renderAudioKnob = document.getElementById('render-audio-knob');
 const renderOutputPath = document.getElementById('render-output-path');
+const renderFolderToggle = document.getElementById('render-folder-toggle');
 const btnSelectOutput = document.getElementById('btn-select-output');
 const btnRenderCancel = document.getElementById('btn-render-cancel');
 const btnRenderStart = document.getElementById('btn-render-start');
@@ -1751,6 +1911,7 @@ const renderMiniPercent = document.getElementById('render-mini-percent');
 
 // --- Render State ---
 let renderIncludeAudio = true;
+let renderUseSceneFolder = true;
 let renderOutputFolder = '';
 let renderBatchActive = false;
 let renderBatchCancelled = false;
@@ -1847,7 +2008,7 @@ function createRenderOptions(sceneName, outputName) {
     const requestedDuration = parseFloat(renderDuration.value) || 0;
 
     return {
-        sceneUrl: `http://localhost:3000/scene/${sceneName}.html`,
+        sceneUrl: getPreviewUrl(`/scene/${sceneName}.html`),
         outputPath: renderOutputFolder,
         sceneName: outputName,
         format: renderFormat.value,
@@ -1856,7 +2017,8 @@ function createRenderOptions(sceneName, outputName) {
         startTime: parseFloat(renderStart.value) || 0,
         duration: requestedDuration,
         includeAudio: !renderBatchActive && renderIncludeAudio && isVideo,
-        audioPath: !renderBatchActive ? (audioFilePath || null) : null
+        audioPath: !renderBatchActive ? (audioFilePath || null) : null,
+        useSceneFolder: renderUseSceneFolder
     };
 }
 
@@ -1929,6 +2091,12 @@ if (renderFormat) {
         } else {
             renderAudioRow.classList.add('hidden');
         }
+    });
+}
+
+if (renderFolderToggle) {
+    renderFolderToggle.addEventListener('change', () => {
+        renderUseSceneFolder = renderFolderToggle.checked;
     });
 }
 

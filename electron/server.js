@@ -1,11 +1,13 @@
 const express = require('express');
 const http = require('http');
+const net = require('net');
 const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 
 let serverInstance = null;
 let ioInstance = null;
+let serverUrl = null;
 
 // ENGINE_ROOT: Where the app code lives (specifically the electron folder context)
 const ENGINE_ROOT = __dirname;
@@ -16,8 +18,29 @@ const ASSETS_ROOT = path.join(ENGINE_ROOT, 'assets');
 let PROJECT_ROOT = process.cwd(); // Default to CWD, updated via API
 let WATCHER = null;
 
-function startServer(port = 3000) {
-    if (serverInstance) return { server: serverInstance, io: ioInstance };
+function canUsePort(port) {
+    if (!port) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+        const probe = net.createServer();
+        probe.once('error', () => resolve(false));
+        probe.once('listening', () => {
+            probe.close(() => resolve(true));
+        });
+        probe.listen(port, '127.0.0.1');
+    });
+}
+
+async function resolveListenPort(port) {
+    if (await canUsePort(port)) return port;
+    console.warn(`[Preview Server] Port ${port} is already in use. Falling back to a free local port.`);
+    return 0;
+}
+
+async function startServer(port = 0) {
+    if (serverInstance) return Promise.resolve({ server: serverInstance, io: ioInstance, url: serverUrl });
+
+    port = await resolveListenPort(port);
 
     const app = express();
     app.use(express.json({ limit: '200mb' }));
@@ -292,6 +315,40 @@ function startServer(port = 3000) {
             // === POSTMESSAGE BRIDGE FOR CROSS-ORIGIN COMMUNICATION ===
             (function() {
                 let animationFrameId = null;
+
+                function isTimelinePlaying(tl) {
+                    return Boolean(tl && !tl.paused() && tl.isActive());
+                }
+
+                function postTimelineState(tl) {
+                    if (!tl) return;
+                    window.parent.postMessage({
+                        type: 'time-update',
+                        currentTime: tl.time(),
+                        isPlaying: isTimelinePlaying(tl)
+                    }, '*');
+                }
+
+                function startReporting(tl) {
+                    if (animationFrameId) return;
+                    const tick = () => {
+                        postTimelineState(tl);
+                        if (!tl.paused() && tl.time() < tl.duration()) {
+                            animationFrameId = requestAnimationFrame(tick);
+                        } else {
+                            animationFrameId = null;
+                            postTimelineState(tl);
+                        }
+                    };
+                    animationFrameId = requestAnimationFrame(tick);
+                }
+
+                function stopReporting() {
+                    if (animationFrameId) {
+                        cancelAnimationFrame(animationFrameId);
+                        animationFrameId = null;
+                    }
+                }
                 
                 // Wait for timeline to be ready
                 function waitForTimeline(callback, maxAttempts = 50) {
@@ -313,6 +370,12 @@ function startServer(port = 3000) {
                 waitForTimeline((tl) => {
                     const metadata = window.sceneMetadata || null;
                     const duration = metadata ? metadata.totalDuration : tl.duration();
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const isRenderMode = urlParams.get('render') === 'true';
+
+                    if (!isRenderMode) {
+                        tl.pause(0);
+                    }
                     
                     window.parent.postMessage({
                         type: 'scene-ready',
@@ -323,24 +386,13 @@ function startServer(port = 3000) {
                     
                     // RENDER MODE: Auto-play timeline when ?render=true is in URL
                     // This is required for timecut to capture animation frames
-                    const urlParams = new URLSearchParams(window.location.search);
-                    if (urlParams.get('render') === 'true') {
+                    if (isRenderMode) {
                         console.log('Render mode detected - starting timeline playback');
                         tl.play(0); // Start from beginning
+                    } else {
+                        postTimelineState(tl);
                     }
                 });
-                
-                // Report time updates to parent
-                function reportTime() {
-                    if (window.masterTl) {
-                        window.parent.postMessage({
-                            type: 'time-update',
-                            currentTime: window.masterTl.time(),
-                            isPlaying: window.masterTl.isActive()
-                        }, '*');
-                    }
-                    animationFrameId = requestAnimationFrame(reportTime);
-                }
                 
                 // Listen for commands from parent
                 window.addEventListener('message', (event) => {
@@ -351,28 +403,28 @@ function startServer(port = 3000) {
                     
                     switch(data.type) {
                         case 'play':
+                            if (window.masterTl.time() >= window.masterTl.duration() - 0.001) {
+                                window.masterTl.seek(0, false);
+                            }
                             window.masterTl.play();
-                            if (!animationFrameId) reportTime();
+                            startReporting(window.masterTl);
                             break;
                         case 'pause':
                             window.masterTl.pause();
-                            if (animationFrameId) {
-                                cancelAnimationFrame(animationFrameId);
-                                animationFrameId = null;
-                            }
+                            stopReporting();
+                            postTimelineState(window.masterTl);
                             break;
                         case 'seek':
-                            window.masterTl.seek(data.time);
-                            window.masterTl.pause();
-                            window.parent.postMessage({
-                                type: 'time-update',
-                                currentTime: data.time,
-                                isPlaying: false
-                            }, '*');
+                            window.masterTl.seek(data.time || 0, false);
+                            if (!data.keepPlaying) {
+                                window.masterTl.pause();
+                                stopReporting();
+                            }
+                            postTimelineState(window.masterTl);
                             break;
                         case 'restart':
                             window.masterTl.restart();
-                            if (!animationFrameId) reportTime();
+                            startReporting(window.masterTl);
                             break;
                         case 'speed':
                             window.masterTl.timeScale(data.value);
@@ -410,17 +462,29 @@ function startServer(port = 3000) {
         socket.on('log', (data) => console.log('[Client Log]', data));
     });
 
-    server.listen(port, () => {
-        console.log(`Preview Server running on http://localhost:${port}`);
+    return new Promise((resolve, reject) => {
+        const finish = () => {
+            const address = server.address();
+            const actualPort = typeof address === 'object' ? address.port : port;
+            serverUrl = `http://127.0.0.1:${actualPort}`;
+            serverInstance = server;
+            ioInstance = io;
+            console.log(`Preview Server running on ${serverUrl}`);
+
+            // Initial watcher setup
+            setupWatcher().catch((error) => {
+                console.error('[Preview Server] Watcher failed:', error);
+            });
+
+            resolve({ app, server, io, url: serverUrl, port: actualPort });
+        };
+
+        const fail = (error) => reject(error);
+
+        server.once('listening', finish);
+        server.once('error', fail);
+        server.listen(port, '127.0.0.1');
     });
-
-    serverInstance = server;
-    ioInstance = io;
-
-    // Initial watcher setup
-    setupWatcher();
-
-    return { app, server, io };
 }
 
 async function setupWatcher() {

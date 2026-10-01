@@ -13,6 +13,7 @@ if (require('electron-squirrel-startup')) {
 }
 
 let mainWindow;
+let previewServerUrl = 'http://127.0.0.1:3000';
 const ptyShell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
 
 function createWindow() {
@@ -42,18 +43,26 @@ function createWindow() {
     });
 }
 
-app.whenReady().then(() => {
-    startServer(3000); // Start Preview Server
-    if (process.env.MOTION_DIRECTOR_VERIFY_RENDER === '1') {
-        runRenderVerification()
-            .then(() => app.quit())
-            .catch((error) => {
-                console.error(error);
-                app.exit(1);
-            });
+app.whenReady().then(async () => {
+    try {
+        const previewServer = await startServer(0); // Start Preview Server on a free local port
+        previewServerUrl = previewServer.url || previewServerUrl;
+        if (process.env.MOTION_DIRECTOR_VERIFY_RENDER === '1') {
+            runRenderVerification()
+                .then(() => app.exit(0))
+                .catch((error) => {
+                    console.error(error);
+                    app.exit(1);
+                });
+            return;
+        }
+        createWindow();
+    } catch (error) {
+        console.error('Failed to start Motion Director:', error);
+        dialog.showErrorBox('Motion Director failed to start', error.message || String(error));
+        app.quit();
         return;
     }
-    createWindow();
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
@@ -164,6 +173,22 @@ ipcMain.handle('upload-assets', async (event, { workPath, sceneName, filePaths }
 const fs = require('fs-extra');
 
 const AI_PROTOCOL_TEMPLATE_PATH = path.join(__dirname, 'AI_SCENE_PROTOCOL.template.md');
+
+function resolveSceneFile(workPath, sceneName) {
+    if (!workPath || !sceneName) {
+        throw new Error('Missing path or scene name');
+    }
+
+    const scenesDir = path.resolve(workPath, 'scenes');
+    const safeFileName = path.basename(sceneName.endsWith('.html') ? sceneName : `${sceneName}.html`);
+    const sceneFile = path.resolve(scenesDir, safeFileName);
+
+    if (!sceneFile.startsWith(scenesDir + path.sep)) {
+        throw new Error('Invalid scene path');
+    }
+
+    return { scenesDir, sceneFile, fileName: safeFileName };
+}
 
 async function ensureAIProtocol(scenesDir) {
     try {
@@ -280,6 +305,37 @@ ipcMain.handle('list-scenes', async (event, workPath) => {
     }
 });
 
+ipcMain.handle('get-preview-server-url', async () => previewServerUrl);
+
+ipcMain.handle('read-scene-code', async (event, { workPath, sceneName }) => {
+    try {
+        const { sceneFile, fileName } = resolveSceneFile(workPath, sceneName);
+        if (!await fs.pathExists(sceneFile)) {
+            return { success: false, error: 'Scene file not found' };
+        }
+
+        const code = await fs.readFile(sceneFile, 'utf8');
+        return { success: true, code, fileName, filePath: sceneFile };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('save-scene-code', async (event, { workPath, sceneName, code }) => {
+    try {
+        const { scenesDir, sceneFile, fileName } = resolveSceneFile(workPath, sceneName);
+        if (typeof code !== 'string') {
+            return { success: false, error: 'Scene code must be text' };
+        }
+
+        await fs.ensureDir(scenesDir);
+        await fs.writeFile(sceneFile, code, 'utf8');
+        return { success: true, fileName, filePath: sceneFile };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
+
 ipcMain.handle('delete-scene', async (event, { workPath, sceneName }) => {
     if (!workPath || !sceneName) return { success: false, error: 'Missing path' };
     try {
@@ -334,7 +390,7 @@ async function runRenderVerification() {
     renderEngine = engine;
 
     const result = await engine.startRender({
-        sceneUrl: 'http://localhost:3000/scene/test-audio-scene.html',
+        sceneUrl: `${previewServerUrl}/scene/test-audio-scene.html`,
         outputPath,
         sceneName: 'smoke-test',
         format: 'mp4',

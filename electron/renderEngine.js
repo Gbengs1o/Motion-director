@@ -70,6 +70,7 @@ class RenderEngine {
      * @param {number} options.duration - Duration in seconds (0 = full scene)
      * @param {boolean} options.includeAudio - Whether to include audio
      * @param {string} options.audioPath - Path to audio file (if any)
+     * @param {boolean} options.useSceneFolder - Whether to place output in sceneName_render
      */
     async startRender(options) {
         if (this.isRendering) {
@@ -89,19 +90,21 @@ class RenderEngine {
             startTime = 0,
             duration,
             includeAudio,
-            audioPath
+            audioPath,
+            useSceneFolder = true
         } = options;
 
         const [width, height] = resolution.split('x').map(Number);
         const isImageSequence = ['png', 'jpeg'].includes(format);
 
-        // Create output directory
-        const outputDir = path.join(outputPath, `${sceneName}_render`);
+        const outputDir = useSceneFolder ? path.join(outputPath, `${sceneName}_render`) : outputPath;
         await fs.ensureDir(outputDir);
 
-        // Frame output directory
-        const framesDir = path.join(outputDir, 'frames');
+        const framesDir = isImageSequence
+            ? (useSceneFolder ? path.join(outputDir, 'frames') : outputDir)
+            : path.join(outputDir, useSceneFolder ? 'frames' : `.${sceneName}_frames_${Date.now()}`);
         await fs.ensureDir(framesDir);
+        const framePrefix = isImageSequence && !useSceneFolder ? `${sceneName}-frame-` : 'frame-';
 
         try {
             this.sendProgress({ status: 'preparing', percent: 0, label: 'Preparing render...' });
@@ -135,7 +138,8 @@ class RenderEngine {
                     height,
                     fps,
                     startTime,
-                    totalFrames
+                    totalFrames,
+                    framePrefix
                 });
 
                 this.sendProgress({
@@ -160,15 +164,16 @@ class RenderEngine {
                 height,
                 fps,
                 startTime,
-                totalFrames
+                totalFrames,
+                framePrefix
             });
 
             this.sendProgress({ status: 'encoding', percent: 88, label: 'Encoding video...' });
-            await this.encodeVideo(framesDir, silentOutputFile, format, fps, ffmpegExecutable, width, height);
+            await this.encodeVideo(framesDir, silentOutputFile, format, fps, ffmpegExecutable, width, height, framePrefix);
 
             if (this.shouldAbort) {
                 this.sendProgress({ status: 'aborted', percent: 0, label: 'Render cancelled' });
-                this.cleanup(outputDir);
+                await this.cleanup(useSceneFolder ? outputDir : framesDir);
                 return null;
             }
 
@@ -183,7 +188,7 @@ class RenderEngine {
                 return null;
             }
 
-            await fs.remove(framesDir);
+            await this.removeBestEffort(framesDir, 'temporary frame files');
 
             this.sendProgress({
                 status: 'complete',
@@ -245,7 +250,7 @@ class RenderEngine {
         }
     }
 
-    async captureFrames({ sceneUrl, framesDir, frameFormat, width, height, fps, startTime, totalFrames }) {
+    async captureFrames({ sceneUrl, framesDir, frameFormat, width, height, fps, startTime, totalFrames, framePrefix = 'frame-' }) {
         const { BrowserWindow } = require('electron');
         if (!BrowserWindow) {
             throw new Error('Electron BrowserWindow is unavailable. Render from the Motion Director app, not plain Node.');
@@ -293,7 +298,7 @@ class RenderEngine {
                     true;
                 `);
 
-                const fileName = `frame-${String(frame + 1).padStart(5, '0')}.${extension}`;
+                const fileName = `${framePrefix}${String(frame + 1).padStart(5, '0')}.${extension}`;
                 const image = await win.webContents.capturePage();
                 const buffer = screenshotType === 'jpeg' ? image.toJPEG(92) : image.toPNG();
                 await fs.writeFile(path.join(framesDir, fileName), buffer);
@@ -323,14 +328,14 @@ class RenderEngine {
         throw new Error('Scene did not expose window.masterTl within 15 seconds.');
     }
 
-    async encodeVideo(framesDir, outputFile, format, fps, ffmpegExecutable, width, height) {
+    async encodeVideo(framesDir, outputFile, format, fps, ffmpegExecutable, width, height, framePrefix = 'frame-') {
         return new Promise((resolve, reject) => {
             const outputWidth = Math.max(2, Math.floor(width / 2) * 2);
             const outputHeight = Math.max(2, Math.floor(height / 2) * 2);
             const ffmpegArgs = [
                 '-y',
                 '-framerate', fps.toString(),
-                '-i', path.join(framesDir, 'frame-%05d.png'),
+                '-i', path.join(framesDir, `${framePrefix}%05d.png`),
                 '-vf', `scale=${outputWidth}:${outputHeight}:flags=lanczos,setsar=1`
             ];
 
@@ -343,7 +348,7 @@ class RenderEngine {
             ffmpegArgs.push(outputFile);
 
             const child = spawn(ffmpegExecutable, ffmpegArgs, {
-                stdio: ['ignore', 'pipe', 'pipe'],
+                stdio: ['ignore', 'ignore', 'pipe'],
                 windowsHide: true
             });
 
@@ -394,7 +399,7 @@ class RenderEngine {
             ffmpegArgs.push(outputFile);
 
             const child = spawn(ffmpegExecutable, ffmpegArgs, {
-                stdio: ['ignore', 'pipe', 'pipe'],
+                stdio: ['ignore', 'ignore', 'pipe'],
                 windowsHide: true
             });
 
@@ -467,6 +472,19 @@ class RenderEngine {
             console.error('Cleanup error:', e);
         }
         this.isRendering = false;
+    }
+
+    async removeBestEffort(dir, label) {
+        try {
+            await Promise.race([
+                fs.remove(dir),
+                new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error(`Timed out removing ${label}`)), 5000);
+                })
+            ]);
+        } catch (error) {
+            console.warn(`Could not remove ${label}:`, error.message);
+        }
     }
 }
 
